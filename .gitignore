@@ -1,0 +1,23 @@
+# Entorno virtual Python
+zap-reportes/venv/Lib/
+zap-reportes/venv/Scripts/
+zap-reportes/venv/Include/
+zap-reportes/venv/pyvenv.cfg
+
+# Resultados de escaneos (datos de clientes)
+zap-reportes/venv/escaneos/
+zap-reportes/venv/informes/
+zap-reportes/venv/nessus/
+
+# Plantilla Word (puede contener info de cliente)
+Documento_modelo/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Temporales
+*.tmp
+*.log

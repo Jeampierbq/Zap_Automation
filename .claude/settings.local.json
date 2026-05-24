@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Scripts/python.exe generar_mapa.py)"
+    ]
+  }
+}

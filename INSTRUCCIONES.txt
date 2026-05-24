@@ -1,0 +1,99 @@
+===============================================================
+  INSTRUCCIONES PARA EJECUTAR EL GENERADOR DE INFORMES ZAP
+===============================================================
+
+PRE-REQUISITOS (hacer una sola vez)
+--------------------------------------
+1. Tener Python 3.14 instalado en:
+   C:\Users\21231\AppData\Local\Programs\Python\Python314\python.exe
+
+2. Tener OWASP ZAP instalado y configurado:
+   - Abrir ZAP
+   - Ir a: Herramientas → Opciones → API
+   - Marcar la casilla "Habilitado"
+   - Copiar la "Clave de API" que aparece
+   - Clic Aceptar
+
+3. Actualizar el archivo config.py con tus datos:
+   Ruta: zap-reportes\venv\config.py
+
+   Cambiar:
+     ZAP_API_KEY = "pegar-tu-clave-de-zap-aqui"
+     ZAP_PORT    = 8080   (o el puerto que use tu ZAP)
+     URLS = [
+        "https://url-a-escanear.pe/",
+        "https://otra-url.pe/",
+     ]
+
+
+===============================================================
+  PASOS PARA EJECUTAR (cada vez que quieras escanear)
+===============================================================
+
+PASO 1 — Abrir PowerShell y navegar a la carpeta:
+
+   cd "C:\Users\21231\OneDrive\Escritorio\Automatizaciones\Automatizaciones\OWASPZAP - Automatización\Version_2\OFIS\OWASPZAP_Automatización\zap-reportes\venv"
+
+
+PASO 2 — Permitir ejecución de scripts (solo si da error de permisos):
+
+   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+
+
+PASO 3 — Activar el entorno virtual:
+
+   .\Scripts\Activate.ps1
+
+   (El prompt cambia a: (venv) PS ...)
+
+
+PASO 4 — Asegurarse que OWASP ZAP esté abierto y corriendo.
+
+
+PASO 5 — Ejecutar el escaneo completo:
+
+   C:\Users\21231\AppData\Local\Programs\Python\Python314\python.exe main.py
+
+   Cuando pregunte "¿Desea generar el informe Word ahora?" → escribir: s
+
+
+PASO 6 — El informe Word se guarda en:
+
+   zap-reportes\venv\informes\OFIS_Plantilla_Completada_FECHA_HORA.docx
+
+
+===============================================================
+  SOLO REGENERAR WORD (sin escanear, usando JSONs existentes)
+===============================================================
+
+Si ya tienes los JSON en la carpeta informes\ y solo quieres
+volver a generar el Word sin correr ZAP:
+
+   C:\Users\21231\AppData\Local\Programs\Python\Python314\python.exe regenerar_word.py
+
+
+===============================================================
+  NOTAS IMPORTANTES
+===============================================================
+
+- El venv fue creado en otra máquina, por eso siempre usar la
+  ruta completa de Python en vez de solo "python".
+
+- Despues de abrir el Word generado:
+  Clic derecho sobre el area del INDICE → "Actualizar campo"
+  → "Actualizar toda la tabla" para que se genere el indice.
+
+- Los campos en ROJO del documento se completan manualmente:
+    [NOMBRE DEL CLIENTE], fecha, tipo de caja, etc.
+
+===============================================================
+
+cd C:\Users\21231\AppData\Local\Programs\Python\Python314\python.exe main.py
+
+
+Debemos hacer tipo un txt de que librerias instalar para que funcione todo este proyecto.
+
+Crear requirements.txt con todas las dependencias
+Agregar comentarios claros en config.py sobre qué debe cambiar cada usuario
+Alinear el puerto (¿8080 o 8081?)
+Limpiar _actualizar_toc_con_word correctamente
