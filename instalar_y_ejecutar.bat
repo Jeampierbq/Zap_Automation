@@ -1,5 +1,6 @@
 @echo off
 setlocal enabledelayedexpansion
+cd /d "%~dp0"
 
 echo ============================================================
 echo   ZAP AUTOMATION - Instalacion completa desde cero
