@@ -18,6 +18,9 @@ __pycache__/
 *.pyo
 *.pyd
 
+# Configuración local con API key (nunca subir al repo)
+zap-reportes/venv/config_user.json
+
 # Temporales
 *.tmp
 *.log

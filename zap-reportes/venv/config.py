@@ -3,10 +3,7 @@ ZAP_PORT  = 8080
 ZAP_PORTS = [8080, 8081, 8082]   # se prueban en orden hasta encontrar ZAP activo
 ZAP_API_KEY = "x" # coloca tu key de ZAP aquí
 
-URLS = [
-   "x", # colocar el Target
-   "x", # colocar el Target
-]
+URLS = []
 
 CARPETA_SALIDA = "informes"
 CARPETA_JSON   = "escaneos"

@@ -4,12 +4,15 @@ import json
 import os
 import sys
 import re
+from pathlib import Path
 from urllib.parse import urlparse
 from generador import generar_word_plantilla
 import config
 
 BASE = f"http://{config.ZAP_HOST}:{config.ZAP_PORT}"
-KEY  = config.ZAP_API_KEY
+
+def _key():
+    return config.ZAP_API_KEY
 
 def log(msg):       print(f"  [INFO]  {msg}")
 def ok(msg):        print(f"  [OK]    {msg}")
@@ -22,7 +25,7 @@ def subtitulo(msg): print(f"\n  -- {msg} --")
 _REGLAS_DESHABILITAR = ["30001", "30002", "90024", "90026", "90029"]
 
 def zap_get(endpoint, params={}, timeout=15):
-    p = {**params, "apikey": KEY}
+    p = {**params, "apikey": _key()}
     for intento in range(3):
         try:
             r = requests.get(f"{BASE}{endpoint}", params=p, timeout=timeout)
@@ -33,7 +36,7 @@ def zap_get(endpoint, params={}, timeout=15):
             time.sleep(2)
 
 def zap_get_raw(endpoint, params={}, timeout=30):
-    p = {**params, "apikey": KEY}
+    p = {**params, "apikey": _key()}
     for intento in range(3):
         try:
             r = requests.get(f"{BASE}{endpoint}", params=p, timeout=timeout)
@@ -744,57 +747,431 @@ def escanear_url(url):
     ok(f"URL finalizada en {minutos} min — {len(alertas)} hallazgos")
     return alertas
 
-def _menu_inicio():
-    print("\n")
-    print("=" * 62)
-    print("    GENERADOR DE INFORMES DE SEGURIDAD ZAP")
-    print("=" * 62)
-    print()
-    print("  ¿Qué desea hacer?\n")
-    print("  [1] Escanear URLs y guardar JSONs")
-    print("      (ZAP debe estar corriendo — lee URLs de config.py)\n")
-    print("  [2] Generar informe Word desde JSONs ya escaneados")
-    print("      (No requiere ZAP — lee archivos de escaneos/)\n")
-    print("─" * 62)
+_CONFIG_USER = Path(__file__).parent / "config_user.json"
+
+def _cargar_config_usuario():
+    if not _CONFIG_USER.exists():
+        return
+    try:
+        with open(_CONFIG_USER, encoding="utf-8") as f:
+            data = json.load(f)
+        if "ZAP_HOST"    in data: config.ZAP_HOST    = data["ZAP_HOST"]
+        if "ZAP_PORT"    in data: config.ZAP_PORT    = data["ZAP_PORT"]
+        if "ZAP_PORTS"   in data: config.ZAP_PORTS   = data["ZAP_PORTS"]
+        if "ZAP_API_KEY" in data: config.ZAP_API_KEY = data["ZAP_API_KEY"]
+    except Exception as e:
+        warn(f"No se pudo cargar config_user.json: {e}")
+
+def _guardar_config_usuario():
+    data = {
+        "ZAP_HOST":    config.ZAP_HOST,
+        "ZAP_PORT":    config.ZAP_PORT,
+        "ZAP_PORTS":   getattr(config, 'ZAP_PORTS', [config.ZAP_PORT]),
+        "ZAP_API_KEY": config.ZAP_API_KEY,
+    }
+    with open(_CONFIG_USER, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+def _conectar_zap():
+    """Intenta conectar a ZAP. Retorna True si conectó, False si el usuario cancela."""
+    global BASE
     while True:
+        puertos = getattr(config, 'ZAP_PORTS', [config.ZAP_PORT])
+        zap_encontrado = False
+        key_incorrecta = False
+        puerto_activo  = None
+
+        for i, puerto in enumerate(puertos):
+            BASE = f"http://{config.ZAP_HOST}:{puerto}"
+            try:
+                r    = requests.get(f"{BASE}/JSON/core/view/version/",
+                                    params={"apikey": _key()}, timeout=5)
+                data = r.json()
+                if data.get('code') == 'unauthorized':
+                    key_incorrecta = True
+                    puerto_activo  = puerto
+                    break
+                config.ZAP_PORT = puerto
+                ok(f"ZAP conectado en {config.ZAP_HOST}:{puerto} — Versión: {data.get('version','?')}")
+                zap_encontrado = True
+                break
+            except requests.exceptions.ConnectionError:
+                if i < len(puertos) - 1:
+                    log(f"Puerto {puerto} sin respuesta — probando {puertos[i+1]}...")
+            except (ValueError, Exception):
+                key_incorrecta = True
+                puerto_activo  = puerto
+                break
+
+        if zap_encontrado:
+            return True
+
+        if key_incorrecta:
+            print()
+            error(f"ZAP responde en {config.ZAP_HOST}:{puerto_activo} pero el API key es incorrecto.")
+            print("  Encuentra el API key en ZAP: Herramientas → Opciones → API")
+            print("  (También puedes configurarlo en [3] Configuración del menú)\n")
+            try:
+                nueva_key = input("  Ingresa el API key (Enter para volver al menú): ").strip()
+            except (EOFError, KeyboardInterrupt):
+                return False
+            if not nueva_key:
+                return False
+            config.ZAP_API_KEY = nueva_key
+            config.ZAP_PORT    = puerto_activo
+            _guardar_config_usuario()
+        else:
+            print()
+            error(f"No se pudo conectar con ZAP en {config.ZAP_HOST} puertos {puertos}")
+            print("  Asegúrate de que ZAP esté abierto y corriendo.")
+            print("  (También puedes configurar host/puerto en [3] Configuración)\n")
+            try:
+                host = input(f"  Host ZAP [{config.ZAP_HOST}] (Enter para volver al menú): ").strip()
+            except (EOFError, KeyboardInterrupt):
+                return False
+            if not host:
+                return False
+            if host.isdigit():
+                warn(f"'{host}' parece un número de puerto, no un host. Usando 'localhost'.")
+                config.ZAP_HOST = "localhost"
+            else:
+                config.ZAP_HOST = host
+            try:
+                p = input(f"  Puerto ZAP [{config.ZAP_PORT}]: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                return False
+            if p.isdigit():
+                config.ZAP_PORT  = int(p)
+                config.ZAP_PORTS = [int(p)]
+            else:
+                config.ZAP_PORTS = [8080, 8081, 8082]
+            _guardar_config_usuario()
+
+def _menu_urls():
+    while True:
+        print("\n" + "─" * 62)
+        print("  URLs a escanear:")
+        print("─" * 62)
+        if config.URLS:
+            for i, url in enumerate(config.URLS, 1):
+                print(f"  {i}. {url}")
+        else:
+            print("  (sin URLs configuradas — agrega al menos una)")
+        print()
+        print("  [A]   Agregar URL")
+        print("  [E #] Eliminar URL  (ej: E 1)")
+        print("  [X]   Eliminar todas")
+        print("  [C]   Continuar y escanear")
+        print("  [V]   Volver al menú")
+        print("─" * 62)
         try:
-            resp = input("  Opción [1/2]: ").strip()
+            resp = input("  Opción: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return
+
+        r = resp.lower()
+        if r == 'v':
+            return
+        elif r == 'x':
+            if not config.URLS:
+                warn("No hay URLs que eliminar.")
+                continue
+            try:
+                conf = input(f"  ¿Eliminar las {len(config.URLS)} URLs? [s/n]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                continue
+            if conf in ("s", "si", "sí", "y"):
+                config.URLS.clear()
+                ok("Todas las URLs eliminadas.")
+        elif r == 'a':
+            print("  Pega una o varias URLs separadas por coma:")
+            print("  Ej: https://a.com, https://b.com, https://c.com\n")
+            try:
+                linea = input("  URLs: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                continue
+            if not linea:
+                continue
+            candidatas = [u.strip() for u in linea.split(",") if u.strip()]
+            validas, rechazadas = [], []
+            for u in candidatas:
+                if not u.startswith(("http://", "https://")):
+                    rechazadas.append(u)
+                elif u in config.URLS:
+                    warn(f"Ya existe: {u}")
+                else:
+                    validas.append(u)
+            if rechazadas:
+                warn(f"Ignoradas (no son URLs): {', '.join(rechazadas)}")
+            if not validas:
+                continue
+            print(f"\n  Se agregarán {len(validas)} URL(s):")
+            for u in validas:
+                print(f"    • {u}")
+            try:
+                conf = input("\n  ¿Confirmar? [s/n]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                continue
+            if conf in ("s", "si", "sí", "y"):
+                config.URLS.extend(validas)
+                _guardar_config_usuario()
+                ok(f"{len(validas)} URL(s) agregadas.")
+        elif r.startswith('e '):
+            partes = r.split()
+            if len(partes) == 2 and partes[1].isdigit():
+                idx = int(partes[1]) - 1
+                if 0 <= idx < len(config.URLS):
+                    eliminada = config.URLS.pop(idx)
+                    _guardar_config_usuario()
+                    ok(f"URL eliminada: {eliminada}")
+                else:
+                    warn("Número fuera de rango.")
+            else:
+                warn("Usa: E <número>  (ej: E 2)")
+        elif r == 'c':
+            if not config.URLS:
+                warn("No hay URLs. Agrega al menos una con [A].")
+            else:
+                _flujo_escaneo()
+                return
+        else:
+            warn("Opción no válida.")
+
+def _menu_configuracion():
+    while True:
+        key = config.ZAP_API_KEY
+        key_display = (key[:4] + "****") if len(key) > 4 else "****"
+        print("\n" + "─" * 62)
+        print("  Configuración ZAP")
+        print("─" * 62)
+        print(f"  Host    : {config.ZAP_HOST}")
+        print(f"  Puerto  : {config.ZAP_PORT}")
+        print(f"  API Key : {key_display}")
+        print()
+        print("  [1] Cambiar host")
+        print("  [2] Cambiar puerto")
+        print("  [3] Cambiar API key")
+        print("  [V] Volver")
+        print("─" * 62)
+        try:
+            resp = input("  Opción: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return
+
+        if resp.lower() == 'v':
+            return
+        elif resp == '1':
+            try:
+                nuevo = input(f"  Nuevo host [{config.ZAP_HOST}]: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                continue
+            if nuevo:
+                config.ZAP_HOST = nuevo
+                _guardar_config_usuario()
+                ok("Host actualizado.")
+        elif resp == '2':
+            try:
+                nuevo = input(f"  Nuevo puerto [{config.ZAP_PORT}]: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                continue
+            if nuevo.isdigit():
+                config.ZAP_PORT  = int(nuevo)
+                config.ZAP_PORTS = [int(nuevo)]
+                _guardar_config_usuario()
+                ok("Puerto actualizado.")
+            else:
+                warn("Ingresa un número válido.")
+        elif resp == '3':
+            try:
+                nuevo = input("  Nueva API key: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                continue
+            if nuevo:
+                config.ZAP_API_KEY = nuevo
+                _guardar_config_usuario()
+                ok("API key actualizada.")
+        else:
+            warn("Opción no válida.")
+
+def _flujo_importar_zap_json():
+    from convertir_zap_json import convertir_todos, CARPETA_ENTRADA
+    print("\n" + "─" * 62)
+    print("  Importar JSON de ZAP")
+    print("─" * 62)
+    print(f"  Carpeta de entrada : {CARPETA_ENTRADA.resolve()}")
+    print(f"  Carpeta de salida  : {(Path(__file__).parent / config.CARPETA_JSON).resolve()}")
+    print()
+    print("  1. Exporta el informe desde ZAP: Informes → Generar informe → JSON")
+    print("  2. Copia el .json resultante a la carpeta de entrada")
+    print("  3. Presiona ENTER aquí para convertir\n")
+    try:
+        resp = input("  ENTER para convertir  (V para volver): ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if resp == 'v':
+        return
+
+    resultados, carpeta = convertir_todos()
+
+    if not resultados:
+        warn("No hay archivos .json en la carpeta de entrada.")
+        print(f"  Coloca los archivos aquí: {carpeta}")
+        print("─" * 62)
+        return
+
+    print()
+    total_sitios = 0
+    for nombre, n, err in resultados:
+        if err:
+            warn(f"{nombre} → {err}")
+        else:
+            ok(f"{nombre} → {n} sitio(s) convertido(s)")
+            total_sitios += n
+
+    print()
+    if total_sitios:
+        ok(f"{total_sitios} sitio(s) listos en escaneos/  →  usa [2] para generar el Word")
+    print("─" * 62)
+
+def _menu_gestionar_urls():
+    while True:
+        print("\n" + "─" * 62)
+        print("  URLs configuradas:")
+        print("─" * 62)
+        if config.URLS:
+            for i, url in enumerate(config.URLS, 1):
+                print(f"  {i:>2}. {url}")
+        else:
+            print("  (sin URLs configuradas)")
+        print()
+        print("  [A]   Agregar URLs")
+        print("  [E #] Eliminar por número  (ej: E 3)")
+        print("  [X]   Eliminar todas")
+        print("  [V]   Volver al menú")
+        print("─" * 62)
+        try:
+            resp = input("  Opción: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return
+        r = resp.lower()
+        if r == 'v':
+            return
+        elif r == 'x':
+            if not config.URLS:
+                warn("No hay URLs que eliminar.")
+                continue
+            try:
+                conf = input(f"  ¿Eliminar las {len(config.URLS)} URLs? [s/n]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                continue
+            if conf in ("s", "si", "sí", "y"):
+                config.URLS.clear()
+                _guardar_config_usuario()
+                ok("Todas las URLs eliminadas.")
+        elif r == 'a':
+            print("  Pega una o varias URLs separadas por coma:")
+            print("  Ej: https://a.com, https://b.com\n")
+            try:
+                linea = input("  URLs: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                continue
+            if not linea:
+                continue
+            candidatas = [u.strip() for u in linea.split(",") if u.strip()]
+            validas, rechazadas = [], []
+            for u in candidatas:
+                if not u.startswith(("http://", "https://")):
+                    rechazadas.append(u)
+                elif u in config.URLS:
+                    warn(f"Ya existe: {u}")
+                else:
+                    validas.append(u)
+            if rechazadas:
+                warn(f"Ignoradas (no son URLs): {', '.join(rechazadas)}")
+            if not validas:
+                continue
+            print(f"\n  Se agregarán {len(validas)} URL(s):")
+            for u in validas:
+                print(f"    • {u}")
+            try:
+                conf = input("\n  ¿Confirmar? [s/n]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                continue
+            if conf in ("s", "si", "sí", "y"):
+                config.URLS.extend(validas)
+                _guardar_config_usuario()
+                ok(f"{len(validas)} URL(s) agregadas.")
+        elif r.startswith('e '):
+            partes = r.split()
+            if len(partes) == 2 and partes[1].isdigit():
+                idx = int(partes[1]) - 1
+                if 0 <= idx < len(config.URLS):
+                    eliminada = config.URLS.pop(idx)
+                    _guardar_config_usuario()
+                    ok(f"Eliminada: {eliminada}")
+                else:
+                    warn("Número fuera de rango.")
+            else:
+                warn("Usa: E <número>  (ej: E 3)")
+        else:
+            warn("Opción no válida.")
+
+def _menu_inicio():
+    while True:
+        key = config.ZAP_API_KEY
+        if not key or key in ("x", "your_key_here"):
+            key_display = "[NO CONFIGURADO]"
+        elif len(key) > 6:
+            key_display = key[:4] + "****"
+        else:
+            key_display = "****"
+        print("\n")
+        print("=" * 62)
+        print("    ZAP AUTOMATION — GENERADOR DE INFORMES DE SEGURIDAD")
+        print("=" * 62)
+        print(f"  ZAP     : {config.ZAP_HOST}:{config.ZAP_PORT}")
+        print(f"  API Key : {key_display}")
+        print(f"  URLs    : {len(config.URLS)} configuradas")
+        print("─" * 62)
+        print("  [1] Ejecutar escaneo")
+        print("  [2] Generar informe Word")
+        print("  [3] Configuración")
+        print("  [4] Gestionar URLs")
+        print("  [5] Importar JSON de ZAP")
+        print("  [0] Salir")
+        print("─" * 62)
+        try:
+            resp = input("  Opción: ").strip()
         except (EOFError, KeyboardInterrupt):
             sys.exit(0)
-        if resp in ('1', '2'):
-            return resp
-        print("  Escribe 1 o 2.\n")
+        if resp == '1':
+            _menu_urls()
+        elif resp == '2':
+            _flujo_generar_word()
+        elif resp == '3':
+            _menu_configuracion()
+        elif resp == '4':
+            _menu_gestionar_urls()
+        elif resp == '5':
+            _flujo_importar_zap_json()
+        elif resp == '0':
+            print("  Hasta luego.\n")
+            sys.exit(0)
+        else:
+            warn("Opción no válida.")
 
 def _flujo_escaneo():
+    if not _conectar_zap():
+        return
+
     pausa_urls  = getattr(config, 'PAUSA_ENTRE_URLS',  60)
     tamano_lote = getattr(config, 'TAMANO_LOTE',       5)
     pausa_lote  = getattr(config, 'PAUSA_ENTRE_LOTES', 300)
 
     print(f"\n  URLs a escanear : {len(config.URLS)}")
     print(f"  JSONs escaneos  : {config.CARPETA_JSON}/")
-    puertos_cfg = getattr(config, 'ZAP_PORTS', [config.ZAP_PORT])
-    print(f"  ZAP en          : {config.ZAP_HOST}:{config.ZAP_PORT}  (fallback: {puertos_cfg})")
+    print(f"  ZAP en          : {config.ZAP_HOST}:{config.ZAP_PORT}")
     print(f"  Pausa entre URLs: {pausa_urls}s  |  Lote cada {tamano_lote} URLs  |  Pausa de lote: {pausa_lote}s\n")
-
-    log("Verificando conexion con ZAP...")
-    puertos = getattr(config, 'ZAP_PORTS', [config.ZAP_PORT])
-    zap_encontrado = False
-    for puerto in puertos:
-        global BASE
-        BASE = f"http://{config.ZAP_HOST}:{puerto}"
-        try:
-            data = zap_get("/JSON/core/view/version/", timeout=5)
-            config.ZAP_PORT = puerto
-            ok(f"ZAP conectado en puerto {puerto} — Version: {data.get('version','?')}")
-            zap_encontrado = True
-            break
-        except:
-            if puerto != puertos[-1]:
-                log(f"Puerto {puerto} no responde — probando {puertos[puertos.index(puerto)+1]}...")
-    if not zap_encontrado:
-        error(f"No se puede conectar con ZAP en ninguno de los puertos: {puertos}")
-        error("Abre ZAP primero y vuelve a ejecutar: python main.py")
-        sys.exit(1)
 
     _asegurar_politica_owasp_web()
     cerrar_ajax()
@@ -864,22 +1241,112 @@ def _flujo_escaneo():
         print("  Informe no generado. Ejecuta 'python main.py' → opción [2] cuando quieras.\n")
 
 def _flujo_generar_word():
-    from pathlib import Path
     from traducir import traducir_alerta
+    from datetime import datetime
 
     carpeta_json = Path(__file__).parent / config.CARPETA_JSON
-    jsons = sorted(carpeta_json.glob("filtrado_*.json"), key=os.path.getmtime)
 
-    if not jsons:
-        error(f"No se encontraron archivos filtrado_*.json en {carpeta_json}")
-        print("  Ejecute primero la opción [1] para escanear y generar JSONs.\n")
-        sys.exit(1)
+    while True:
+        disponibles = sorted(carpeta_json.glob("filtrado_*.json"), key=os.path.getmtime)
 
-    print(f"\n  JSONs encontrados: {len(jsons)} archivo(s) en {carpeta_json}/\n")
+        if not disponibles:
+            print("\n" + "─" * 62)
+            warn("No hay escaneos disponibles.")
+            print(f"\n  Carpeta: {carpeta_json.resolve()}")
+            print("  → Opción [1] para escanear con ZAP")
+            print("  → Opción [5] para importar un JSON de ZAP")
+            print("─" * 62)
+            return
+
+        # Leer metadata de cada JSON
+        entradas = []
+        for ruta in disponibles:
+            try:
+                with open(ruta, encoding='utf-8') as f:
+                    data = json.load(f)
+                url    = data.get("url_objetivo") or data.get("dominio") or ruta.stem
+                total  = data.get("total_hallazgos", len(data.get("alerts", [])))
+                alerts = data.get("alerts", [])
+                alto   = sum(1 for a in alerts if str(a.get("riskcode","0")) == "3")
+                medio  = sum(1 for a in alerts if str(a.get("riskcode","0")) == "2")
+                bajo   = sum(1 for a in alerts if str(a.get("riskcode","0")) == "1")
+                fuente = " [manual]" if data.get("fuente") == "zap_manual" else ""
+            except Exception:
+                url, total, alto, medio, bajo, fuente = ruta.stem, 0, 0, 0, 0, ""
+            fecha = datetime.fromtimestamp(ruta.stat().st_mtime).strftime("%d/%m %H:%M")
+            entradas.append((ruta, url, alto, medio, bajo, fecha, fuente))
+
+        print("\n" + "─" * 62)
+        print("  Escaneos disponibles:")
+        print("─" * 62)
+        for i, (ruta, url, alto, medio, bajo, fecha, fuente) in enumerate(entradas, 1):
+            sev = f"A:{alto} M:{medio} B:{bajo}"
+            print(f"  {i:>2}. {url[:42]:<42} {sev:<14} {fecha}{fuente}")
+        print()
+        print("  [T]          : generar Word con todos los escaneos")
+        print("  [#]          : generar solo algunos  (ej: 1,3)")
+        print("  [D #]        : eliminar escaneo       (ej: D 2)")
+        print("  [X]          : eliminar todos los escaneos")
+        print("  [V]          : volver al menú")
+        print("─" * 62)
+        try:
+            sel = input("  Opción: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return
+
+        sl = sel.lower()
+
+        if sl == 'v':
+            return
+
+        elif sl == 'x':
+            try:
+                conf = input(f"  ¿Eliminar los {len(entradas)} escaneos? [s/n]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                continue
+            if conf in ("s", "si", "sí", "y"):
+                for ruta, *_ in entradas:
+                    ruta.unlink(missing_ok=True)
+                ok("Todos los escaneos eliminados.")
+            continue
+
+        elif sl.startswith('d '):
+            partes = sl.split()
+            if len(partes) == 2 and partes[1].isdigit():
+                idx = int(partes[1]) - 1
+                if 0 <= idx < len(entradas):
+                    ruta = entradas[idx][0]
+                    ruta.unlink(missing_ok=True)
+                    ok(f"Eliminado: {entradas[idx][1]}")
+                else:
+                    warn("Número fuera de rango.")
+            else:
+                warn("Usa: D <número>  (ej: D 2)")
+            continue
+
+        elif sl in ('t', ''):
+            jsons_usar = [e[0] for e in entradas]
+            break
+
+        else:
+            # Generar Word con selección por números
+            jsons_usar = []
+            for s in sel.split(","):
+                s = s.strip()
+                if s.isdigit():
+                    idx = int(s) - 1
+                    if 0 <= idx < len(entradas):
+                        jsons_usar.append(entradas[idx][0])
+                    else:
+                        warn(f"Número {s} fuera de rango, ignorado.")
+            if not jsons_usar:
+                warn("Usa T para todos, o ingresa números (ej: 1,3).")
+                continue
+            break
 
     # Deduplicar: si hay varios JSON para la misma URL, usar el más reciente
     vistos = {}
-    for ruta in jsons:
+    for ruta in jsons_usar:
         with open(ruta, encoding='utf-8') as f:
             data = json.load(f)
         url = data.get("url_objetivo") or data.get("dominio", str(ruta.stem))
@@ -892,18 +1359,56 @@ def _flujo_generar_word():
         lista_sitios.append((url, alertas))
         log(f"Cargado: {ruta.name}  ({len(alertas)} alertas)")
 
+    # ── Datos del informe ─────────────────────────────────────
+    print("\n" + "─" * 62)
+    print("  DATOS DEL INFORME")
+    print("─" * 62)
+    try:
+        cliente = input("  Nombre del cliente    : ").strip()
+    except (EOFError, KeyboardInterrupt):
+        cliente = ""
+
+    hoy = datetime.now().strftime('%d/%m/%Y')
+    try:
+        fecha_raw = input(f"  Fecha [Enter = {hoy}] : ").strip()
+    except (EOFError, KeyboardInterrupt):
+        fecha_raw = ""
+    fecha_informe = fecha_raw if fecha_raw else hoy
+
+    print("  Tipo de prueba:")
+    print("    [1] Caja Negra    [2] Caja Blanca    [3] Caja Gris")
+    try:
+        op_caja = input("  Selecciona [1-3]      : ").strip()
+    except (EOFError, KeyboardInterrupt):
+        op_caja = ""
+    tipo_caja = {"1": "Caja Negra", "2": "Caja Blanca", "3": "Caja Gris"}.get(op_caja, "")
+    print("─" * 62)
+
     print()
     log(f"Generando Word ({len(lista_sitios)} sitio(s))...")
     os.makedirs(config.CARPETA_SALIDA, exist_ok=True)
-    ruta_word = generar_word_plantilla(lista_sitios, config.CARPETA_SALIDA)
+    ruta_word = generar_word_plantilla(lista_sitios, config.CARPETA_SALIDA,
+                                       cliente=cliente, fecha=fecha_informe,
+                                       tipo_caja=tipo_caja)
     ok(f"Word generado: {ruta_word}\n")
 
 def main():
-    opcion = _menu_inicio()
-    if opcion == '1':
-        _flujo_escaneo()
-    else:
-        _flujo_generar_word()
+    _cargar_config_usuario()
+    config.URLS = []
+    if config.ZAP_API_KEY in ("x", "", "your_key_here"):
+        print("\n" + "=" * 62)
+        print("  CONFIGURACIÓN INICIAL — API Key de ZAP")
+        print("=" * 62)
+        print("  Encuéntralo en ZAP: Herramientas → Opciones → API\n")
+        try:
+            key = input("  Ingresa el API key de ZAP: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            key = ""
+        if key:
+            config.ZAP_API_KEY = key
+            _guardar_config_usuario()
+            ok("API key guardado.")
+    _menu_inicio()
 
 if __name__ == "__main__":
     main()

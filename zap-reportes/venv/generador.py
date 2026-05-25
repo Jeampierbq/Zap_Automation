@@ -574,26 +574,118 @@ def _p_get_text(elem):
     return ''
 
 
-def _fix_cliente_fecha(doc, fecha_str):
-    """Reemplaza 'OFIS' → '[NOMBRE DEL CLIENTE]' (rojo) y actualiza la fecha."""
+def _sustituir_en_textboxes(doc, placeholder, valor, color_valor='1F1F1F', color_ph='FF0000'):
+    """
+    Reemplaza placeholder en cuadros de texto (w:txbxContent).
+    Trabaja a nivel de párrafo completo para manejar el caso donde Word parte
+    el placeholder en varios runs (ej: '(FECHA' en un run y ')' en el siguiente).
+    """
+    color_hex  = color_valor if valor else color_ph
+    texto_final = valor if valor else placeholder
+
+    for txbx in doc.element.body.iter(qn('w:txbxContent')):
+        for p_elem in txbx.iter(qn('w:p')):
+            # Recolectar todos los (r_elem, t_elem) con texto
+            tokens = [
+                (r, t)
+                for r in p_elem.iter(qn('w:r'))
+                for t in r.findall(qn('w:t'))
+                if t.text
+            ]
+            full_text = ''.join(t.text for _, t in tokens)
+            if placeholder not in full_text:
+                continue
+
+            ph_start = full_text.index(placeholder)
+            ph_end   = ph_start + len(placeholder)
+
+            pos = 0
+            primer_overlap = True
+            for r_elem, t_elem in tokens:
+                tok_ini = pos
+                tok_fin = pos + len(t_elem.text)
+                pos = tok_fin
+
+                # ¿Este token toca el placeholder?
+                if tok_fin <= ph_start or tok_ini >= ph_end:
+                    continue
+
+                antes  = t_elem.text[:max(0, ph_start - tok_ini)]
+                despues = t_elem.text[max(0, ph_end - tok_ini):]
+
+                if primer_overlap:
+                    # Primer run que toca el placeholder: poner el reemplazo
+                    t_elem.text = antes + texto_final + despues
+                    primer_overlap = False
+                    # Actualizar color del run
+                    rPr = r_elem.find(qn('w:rPr'))
+                    if rPr is None:
+                        rPr = OxmlElement('w:rPr')
+                        r_elem.insert(0, rPr)
+                    c = rPr.find(qn('w:color'))
+                    if c is None:
+                        c = OxmlElement('w:color')
+                        rPr.append(c)
+                    c.set(qn('w:val'), color_hex)
+                else:
+                    # Runs siguientes: eliminar su parte del placeholder
+                    t_elem.text = antes + despues
+
+
+def _fix_cliente_fecha(doc, fecha_str, cliente=""):
+    """
+    Reemplaza placeholders en la portada preservando el formato original de cada run.
+    Cubre tanto párrafos normales como cuadros de texto (w:txbxContent).
+    """
+    _ROJO  = RGBColor(0xFF, 0x00, 0x00)
+    _NEGRO = RGBColor(0x1F, 0x1F, 0x1F)
+
+    # ── Cuadros de texto: (FECHA) y (CLIENTE) ────────────────
+    # Los cuadros de texto de la portada no están en doc.paragraphs
+    _sustituir_en_textboxes(doc, '(FECHA)',   fecha_str, '1F1F1F', 'FF0000')
+    _sustituir_en_textboxes(doc, '(CLIENTE)', cliente,   '1F1F1F', 'FF0000')
+
+    # ── Párrafos normales de la portada ──────────────────────
+    paras = list(doc.paragraphs)
+    idx_heading = next(
+        (i for i, p in enumerate(paras)
+         if p.style and ('Heading' in p.style.name or 'Ttulo' in p.style.name)),
+        len(paras),
+    )
+    for para in paras[:idx_heading]:
+        for run in para.runs:
+            if '(FECHA)' in run.text:
+                if fecha_str:
+                    run.text = run.text.replace('(FECHA)', fecha_str)
+                    run.font.color.rgb = _NEGRO
+                else:
+                    run.font.color.rgb = _ROJO
+                    run.font.bold = True
+            if '(CLIENTE)' in run.text:
+                if cliente:
+                    run.text = run.text.replace('(CLIENTE)', cliente)
+                    run.font.color.rgb = _NEGRO
+                else:
+                    run.font.color.rgb = _ROJO
+                    run.font.bold = True
+
+    # ── Memo: Cliente: OFIS / Fecha: DD/MM/YYYY ───────────────
     for para in doc.paragraphs:
         txt = para.text.strip()
-
         if txt.startswith('Cliente:'):
             for run in para.runs:
                 if 'OFIS' in run.text:
-                    run.text = '[NOMBRE DEL CLIENTE]'
-                    run.font.color.rgb = RGBColor(0xFF, 0x00, 0x00)
+                    run.text = cliente if cliente else '[NOMBRE DEL CLIENTE]'
+                    run.font.color.rgb = _NEGRO if cliente else _ROJO
                     run.font.bold = True
                     break
-
         elif txt.startswith('Fecha:') and re.search(r'\d{2}/\d{2}/\d{4}', txt):
             date_runs = [r for r in para.runs
                          if r.text.strip() and 'Fecha:' not in r.text]
             for i, run in enumerate(date_runs):
                 if i == 0:
                     run.text = fecha_str
-                    run.font.color.rgb = RGBColor(0xFF, 0x00, 0x00)
+                    run.font.color.rgb = _NEGRO
                 else:
                     run.text = ''
 
@@ -763,11 +855,12 @@ def _aplicar_fuente_global(doc, fuente='Century Gothic'):
                 run.font.name = fuente
 
 
-def _parchar_textos_plantilla(doc):
+def _parchar_textos_plantilla(doc, cliente="", tipo_caja=""):
     """
     Actualiza en la plantilla cargada los textos estáticos neutros.
-    Elimina el bloque memo De:/Asunto:, colorea (CLIENTE) en rojo,
-    reemplaza Introducción, Limitaciones, Conclusiones y Recomendaciones.
+    Elimina el bloque memo De:/Asunto:, reemplaza Introducción, Limitaciones,
+    Conclusiones y Recomendaciones. Si cliente/tipo_caja son provistos,
+    sustituye los placeholders con los valores reales; si no, los deja en rojo.
     """
     body   = doc.element.body
     paras  = list(doc.paragraphs)
@@ -860,8 +953,15 @@ def _parchar_textos_plantilla(doc):
     _reemplazar_seccion({'Introducción', '1. Introducción'}, _INTRO_PARRAFOS,
                         left_indent=228600, first_line_indent=220980)
 
-    # Colorear (CLIENTE) en rojo en todos los párrafos de Introducción
-    for p in doc.paragraphs:
+    # Reemplazar (CLIENTE) solo en párrafos del cuerpo (no portada)
+    # La portada ya fue procesada por _fix_cliente_fecha preservando su tamaño de fuente.
+    _paras_body = list(doc.paragraphs)
+    _idx_h = next(
+        (i for i, p in enumerate(_paras_body)
+         if p.style and ('Heading' in p.style.name or 'Ttulo' in p.style.name)),
+        0,
+    )
+    for p in _paras_body[_idx_h:]:
         if '(CLIENTE)' not in p.text:
             continue
         txt_full = p.text
@@ -873,10 +973,16 @@ def _parchar_textos_plantilla(doc):
                 r.font.name = 'Century Gothic'; r.font.size = Pt(11)
                 r.font.color.rgb = RGBColor(0x33, 0x33, 0x33)
             if idx_parte < len(partes) - 1:
-                r_ph = p.add_run('(CLIENTE)')
-                r_ph.font.name = 'Century Gothic'; r_ph.font.size = Pt(11)
-                r_ph.font.color.rgb = RGBColor(0xFF, 0x00, 0x00)
-                r_ph.font.bold = True
+                if cliente:
+                    r_ph = p.add_run(cliente)
+                    r_ph.font.name = 'Century Gothic'; r_ph.font.size = Pt(11)
+                    r_ph.font.color.rgb = RGBColor(0x1F, 0x1F, 0x1F)
+                    r_ph.font.bold = True
+                else:
+                    r_ph = p.add_run('(CLIENTE)')
+                    r_ph.font.name = 'Century Gothic'; r_ph.font.size = Pt(11)
+                    r_ph.font.color.rgb = RGBColor(0xFF, 0x00, 0x00)
+                    r_ph.font.bold = True
 
     # ── Conclusiones ─────────────────────────────────────────────
     _reemplazar_seccion({'Conclusiones'}, [_CONCLUSIONES_TEXTO],
@@ -892,7 +998,7 @@ def _parchar_textos_plantilla(doc):
         [_LIMITACIONES_TEXTO],
         estilo='List Paragraph',
     )
-    # Colorear (TIPO DE CAJA) en rojo dentro de Limitaciones
+    # Reemplazar (TIPO DE CAJA) dentro de Limitaciones
     for p in doc.paragraphs:
         if '(TIPO DE CAJA)' not in p.text:
             continue
@@ -905,10 +1011,16 @@ def _parchar_textos_plantilla(doc):
                 r.font.name = 'Century Gothic'; r.font.size = Pt(11)
                 r.font.color.rgb = _COLOR_NORMAL
             if idx_parte < len(partes) - 1:
-                r_ph = p.add_run('(TIPO DE CAJA)')
-                r_ph.font.name = 'Century Gothic'; r_ph.font.size = Pt(11)
-                r_ph.font.color.rgb = RGBColor(0xFF, 0x00, 0x00)
-                r_ph.font.bold = True
+                if tipo_caja:
+                    r_ph = p.add_run(tipo_caja)
+                    r_ph.font.name = 'Century Gothic'; r_ph.font.size = Pt(11)
+                    r_ph.font.color.rgb = RGBColor(0x1F, 0x1F, 0x1F)
+                    r_ph.font.bold = True
+                else:
+                    r_ph = p.add_run('(TIPO DE CAJA)')
+                    r_ph.font.name = 'Century Gothic'; r_ph.font.size = Pt(11)
+                    r_ph.font.color.rgb = RGBColor(0xFF, 0x00, 0x00)
+                    r_ph.font.bold = True
 
     # ── Bullet Informativo ────────────────────────────────────────
     for p in doc.paragraphs:
@@ -949,7 +1061,8 @@ def _parchar_textos_plantilla(doc):
 # ─────────────────────────────────────────────────────────────
 # Generación basada en plantilla OFIS (función pública)
 # ─────────────────────────────────────────────────────────────
-def generar_word_plantilla(lista_sitios, carpeta_salida):
+def generar_word_plantilla(lista_sitios, carpeta_salida,
+                           cliente="", fecha=None, tipo_caja=""):
     """
     Genera el Word usando OFIS - Plantilla.docx como base.
     - Pobla la tabla de URLs con las URLs reales.
@@ -959,7 +1072,8 @@ def generar_word_plantilla(lista_sitios, carpeta_salida):
     """
     doc  = Document(BytesIO(base64.b64decode(_PLANTILLA_B64)))
     body = doc.element.body
-    fecha = datetime.now().strftime('%d/%m/%Y')
+    if fecha is None:
+        fecha = datetime.now().strftime('%d/%m/%Y')
 
     # Tabla 1 y Tabla 2 ya existen en la plantilla → contador empieza en 2
     contador = _Contador()
@@ -967,13 +1081,13 @@ def generar_word_plantilla(lista_sitios, carpeta_salida):
     contador.figura = 0
 
     # ── 1. Actualizar placeholders de portada ────────────────
-    _fix_cliente_fecha(doc, fecha)
+    _fix_cliente_fecha(doc, fecha, cliente)
 
     # ── 1b. Activar actualización automática del índice al abrir ──
     _activar_update_fields(doc)
 
     # ── 1c. Actualizar textos estáticos (intro, informativo, etc.) ──
-    _parchar_textos_plantilla(doc)
+    _parchar_textos_plantilla(doc, cliente, tipo_caja)
 
     # ── 1d. Aplicar fuente Century Gothic a todo el contenido post-portada ──
     _aplicar_fuente_global(doc)

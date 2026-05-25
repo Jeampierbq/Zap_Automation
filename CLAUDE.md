@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Automated security report generation pipeline. Runs OWASP ZAP scans against a configurable list of URLs and produces a Word document based on a template. Also supports importing Nessus HTML exports.
+Automated security report generation pipeline. Runs OWASP ZAP scans against a configurable list of URLs and produces a Word document based on a template. Also supports importing ZAP JSON exports.
 
 Designed to be used by any analyst for any client — all client-specific settings live in `config.py` and the Word template.
 
@@ -15,13 +15,18 @@ python main.py
 python regenerar_word.py
 ```
 
-## Commands
+## Installation (new machine)
 
-**Regenerate the Word report from existing JSON results (no ZAP required):**
 ```
 cd zap-reportes/venv
-python regenerar_word.py
+pip install -r requirements.txt
 ```
+
+Required packages: `requests`, `python-docx`, `lxml`, `matplotlib`, `deep_translator`.
+
+After installing, configure the ZAP API key from the `[3] Configuración` menu in `main.py`. The key is saved to `config_user.json` (excluded from git).
+
+## Commands
 
 **Run a full ZAP scan + generate report (ZAP must be running):**
 ```
@@ -29,12 +34,15 @@ cd zap-reportes/venv
 python main.py
 ```
 
-**Convert Nessus HTML exports to compatible JSON:**
+**Regenerate the Word report from existing JSON results (no ZAP required):**
 ```
-python convertir_nessus.py
-# Place .html files from Nessus "Detailed Vulnerabilities By Host" template in nessus/
-# Outputs filtrado_*.json to escaneos/
+cd zap-reportes/venv
+python regenerar_word.py
 ```
+Both scripts prompt for: client name, report date (free text — e.g. "MAYO 2026" or "24/05/2026"), and test type (Caja Negra / Caja Blanca / Caja Gris). If a field is left empty the placeholder remains in red in the document.
+
+**Import a ZAP JSON export and convert it to the internal format:**
+Use option `[5] Importar JSON de ZAP` in the main menu, or place the `.json` files in `zap_exports/` and run `convertir_zap_json.py`.
 
 ## Architecture
 
@@ -43,16 +51,16 @@ python convertir_nessus.py
 ```
 ZAP API  ──► main.py ──────────────────────► escaneos/filtrado_*.json
                                                         │
-Nessus HTML ──► convertir_nessus.py ──────────────────►│
+ZAP JSON ──► convertir_zap_json.py ───────────────────►│
                                                         │
-                                         regenerar_word.py
+                                         regenerar_word.py / main.py [2]
                                                         │
                                          ┌──────────────┼──────────────┐
                                     main.priorizar_alertas()            │
                                     traducir.traducir_alerta()          │
                                     generador.generar_word_plantilla() ─┘
                                                         │
-                                         informes/Reporte_Consolidado_*.docx
+                                         informes/reporte_consolidado_*.docx
 ```
 
 ### File responsibilities
@@ -60,11 +68,12 @@ Nessus HTML ──► convertir_nessus.py ────────────�
 | File | Role |
 |------|------|
 | `config.py` | ZAP connection settings, URL list, scan timeouts, AJAX browser config, scan policy |
-| `main.py` | Full scan engine (Context → Spider → AJAX Spider → Active Scan) + alert filtering/scoring |
+| `config_user.json` | Machine-local overrides (ZAP host/port/key) — auto-created, excluded from git |
+| `main.py` | Full scan engine (Context → Spider → AJAX Spider → Active Scan) + alert filtering/scoring + interactive menu |
 | `traducir.py` | EN→ES translation dictionary + CWE mapping by vulnerability name |
 | `generador.py` | Word document engine — all python-docx logic lives here |
-| `regenerar_word.py` | Entry point for report generation from existing JSONs |
-| `convertir_nessus.py` | Converts Nessus HTML reports to the same JSON format as ZAP |
+| `regenerar_word.py` | Standalone entry point for report generation from existing JSONs (no ZAP needed) |
+| `convertir_zap_json.py` | Converts ZAP-exported JSON reports to the internal `filtrado_*.json` format |
 
 ### Scan engine (`main.py`)
 
@@ -117,12 +126,21 @@ score = confidence×25
 
 ### Word generation (`generador.generar_word_plantilla`)
 
-Opens the base template from `Documento_modelo/` as the base document. Key behaviors:
+Signature: `generar_word_plantilla(lista_sitios, carpeta_salida, cliente="", fecha=None, tipo_caja="")`
+
+- `cliente`: replaces `(CLIENTE)` placeholders throughout the document
+- `fecha`: replaces `(FECHA)` — accepts any string (e.g. "MAYO 2026", "24/05/2026"); defaults to today
+- `tipo_caja`: replaces `(TIPO DE CAJA)` in the Limitaciones section — must be one of "Caja Negra", "Caja Blanca", "Caja Gris"
+- If any parameter is empty, the placeholder remains visible in red in the output document
+
+**Cover page placeholder replacement:**
+The template cover page uses Word text boxes (`w:txbxContent`). `doc.paragraphs` does NOT include text box content — replacement uses `doc.element.body.iter(qn('w:txbxContent'))` directly. Word sometimes splits a placeholder like `(FECHA)` across two XML runs; the replacement function assembles the full paragraph text first, finds the placeholder by position, then patches the affected runs.
+
+Key behaviors:
 - **Table counter starts at 2** — the template already has Tabla 1 (criticality) and Tabla 2 (URLs)
 - **No second TOC** — the template already has a TOC field; the generator does not add another
 - **Anchor-based insertion**: content is inserted between `Resumen Ejecutivo Global` and `Recomendaciones` headings
 - **URL table**: dynamically replaces the Nro./URL Analizadas/Status table in "Alcance del servicio"
-- **Portada placeholders**: client name placeholder shown in red, date → current date in red
 - **Evidence row**: included in each finding's detail table only when concrete evidence exists in instances
 
 Per-URL section structure (inside section 5):
@@ -158,7 +176,7 @@ After scan completes, user is prompted: `¿Generar informe Word ahora? [s/n]`
                 "instances": [{"uri": "...", "param": "...", "evidence": "...", "attack": "..."}] } ]
 }
 ```
-Nessus-sourced JSONs use the same schema with `"fuente": "nessus"`.
+ZAP-import JSONs include `"fuente": "zap_manual"`.
 
 ## Configuration (`config.py`)
 
@@ -174,6 +192,8 @@ Key settings to adjust before running:
 - `CARPETA_SALIDA`: output folder for Word reports (default `informes/`)
 - `CARPETA_JSON`: output folder for JSON scan results (default `escaneos/`)
 
+Runtime overrides (host, port, key) are saved to `config_user.json` and loaded automatically on startup.
+
 ## Template location
 
 ```
@@ -182,8 +202,13 @@ Documento_modelo/
 
 Place the Word template (.docx) in this folder. The path is resolved relative to `generador.py`. The template uses Spanish Word style names: `Ttulo1`, `Ttulo2`, `Listaconvietas`, `Prrafodelista`, `Descripcin`. The generator tries these first, then falls back to `Heading 1`/`Heading 2`.
 
+The template must contain these heading anchors (exact text):
+- `Resumen Ejecutivo Global` — content is inserted after this heading
+- `Conclusiones` or `Recomendaciones` — content insertion stops before this heading
+
 ## Git / deployment notes
 
-- The venv `Lib/`, `Scripts/`, `escaneos/`, `informes/`, `nessus/`, and `Documento_modelo/` are excluded via `.gitignore`
+- The venv `Lib/`, `Scripts/`, `escaneos/`, `informes/`, `nessus/`, `config_user.json`, and `Documento_modelo/` are excluded via `.gitignore`
 - Only source files are committed: `*.py`, `CLAUDE.md`, `.gitignore`, `requirements.txt`
-- `ZAP_API_KEY` in `config.py` should be set to `""` before committing; fill in on each machine
+- `ZAP_API_KEY` in `config.py` is a placeholder (`"x"`) — real key is stored in `config_user.json` on each machine
+- On a new machine: `pip install -r requirements.txt`, then set the API key from the menu
