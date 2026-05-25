@@ -1,99 +1,108 @@
 ===============================================================
-  INSTRUCCIONES PARA EJECUTAR EL GENERADOR DE INFORMES ZAP
+  ZAP AUTOMATION - INSTRUCCIONES DE USO
 ===============================================================
-
-PRE-REQUISITOS (hacer una sola vez)
---------------------------------------
-1. Tener Python 3.14 instalado en:
-   C:\Users\21231\AppData\Local\Programs\Python\Python314\python.exe
-
-2. Tener OWASP ZAP instalado y configurado:
-   - Abrir ZAP
-   - Ir a: Herramientas → Opciones → API
-   - Marcar la casilla "Habilitado"
-   - Copiar la "Clave de API" que aparece
-   - Clic Aceptar
-
-3. Actualizar el archivo config.py con tus datos:
-   Ruta: zap-reportes\venv\config.py
-
-   Cambiar:
-     ZAP_API_KEY = "pegar-tu-clave-de-zap-aqui"
-     ZAP_PORT    = 8080   (o el puerto que use tu ZAP)
-     URLS = [
-        "https://url-a-escanear.pe/",
-        "https://otra-url.pe/",
-     ]
 
 
 ===============================================================
-  PASOS PARA EJECUTAR (cada vez que quieras escanear)
+  INSTALACION (solo la primera vez en cada maquina)
 ===============================================================
 
-PASO 1 — Abrir PowerShell y navegar a la carpeta:
+WINDOWS
+-------
+1. Instalar Python 3 desde https://python.org
+   (marcar "Add Python to PATH" durante la instalacion)
 
-   cd "C:\Users\21231\OneDrive\Escritorio\Automatizaciones\Automatizaciones\OWASPZAP - Automatización\Version_2\OFIS\OWASPZAP_Automatización\zap-reportes\venv"
+2. Clonar o copiar el proyecto a tu maquina.
 
-
-PASO 2 — Permitir ejecución de scripts (solo si da error de permisos):
-
-   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-
-
-PASO 3 — Activar el entorno virtual:
-
-   .\Scripts\Activate.ps1
-
-   (El prompt cambia a: (venv) PS ...)
+3. Doble clic en:  instalar_y_ejecutar.bat
+   Eso instala las dependencias y arranca el programa solo.
 
 
-PASO 4 — Asegurarse que OWASP ZAP esté abierto y corriendo.
+LINUX / MAC
+-----------
+1. Instalar Python 3:
+   sudo apt install python3 python3-pip   (Ubuntu/Debian)
+   brew install python3                   (Mac)
 
+2. Clonar o copiar el proyecto a tu maquina.
 
-PASO 5 — Ejecutar el escaneo completo:
-
-   C:\Users\21231\AppData\Local\Programs\Python\Python314\python.exe main.py
-
-   Cuando pregunte "¿Desea generar el informe Word ahora?" → escribir: s
-
-
-PASO 6 — El informe Word se guarda en:
-
-   zap-reportes\venv\informes\OFIS_Plantilla_Completada_FECHA_HORA.docx
+3. Abrir terminal en la carpeta del proyecto y ejecutar:
+   chmod +x setup.sh
+   ./setup.sh
+   (chmod solo se necesita la primera vez)
 
 
 ===============================================================
-  SOLO REGENERAR WORD (sin escanear, usando JSONs existentes)
+  USO NORMAL (cada vez que quieras escanear)
 ===============================================================
 
-Si ya tienes los JSON en la carpeta informes\ y solo quieres
-volver a generar el Word sin correr ZAP:
+PRE-REQUISITO: tener OWASP ZAP abierto y corriendo.
 
-   C:\Users\21231\AppData\Local\Programs\Python\Python314\python.exe regenerar_word.py
+WINDOWS — ejecutar:
+   instalar_y_ejecutar.bat
+
+LINUX/MAC — ejecutar:
+   ./setup.sh
+
+O directamente desde terminal:
+   Windows:    cd zap-reportes\venv  &&  python main.py
+   Linux/Mac:  cd zap-reportes/venv  &&  python3 main.py
+
+El menu interactivo permite:
+  [1] Escanear URLs y generar informe Word
+  [2] Solo generar Word (con JSONs ya existentes)
+  [3] Configuracion (API key, puerto ZAP, URLs)
+  [4] Importar JSON exportado de ZAP
 
 
 ===============================================================
-  NOTAS IMPORTANTES
+  CONFIGURACION (primera vez o nuevo cliente)
 ===============================================================
 
-- El venv fue creado en otra máquina, por eso siempre usar la
-  ruta completa de Python en vez de solo "python".
+1. Abrir ZAP → Herramientas → Opciones → API
+   Marcar "Habilitado" y copiar la Clave de API.
 
-- Despues de abrir el Word generado:
+2. En el menu del programa, ir a [3] Configuracion
+   e ingresar la clave copiada. Se guarda automaticamente.
+
+3. Para cambiar las URLs a escanear, editar:
+   zap-reportes/venv/config.py  →  lista URLS
+
+
+===============================================================
+  SOLO REGENERAR WORD (sin escanear)
+===============================================================
+
+Si ya tienes los JSON en escaneos/ y solo quieres
+regenerar el informe Word sin correr ZAP:
+
+  Windows:    cd zap-reportes\venv  &&  python regenerar_word.py
+  Linux/Mac:  cd zap-reportes/venv  &&  python3 regenerar_word.py
+
+Pedira: nombre del cliente, fecha y tipo de caja.
+
+
+===============================================================
+  DONDE QUEDAN LOS ARCHIVOS
+===============================================================
+
+  Resultados JSON:   zap-reportes/venv/escaneos/
+  Informes Word:     zap-reportes/venv/informes/
+  Plantilla Word:    Documento_modelo/
+
+
+===============================================================
+  NOTAS
+===============================================================
+
+- Despues de abrir el Word generado, actualizar el indice:
   Clic derecho sobre el area del INDICE → "Actualizar campo"
-  → "Actualizar toda la tabla" para que se genere el indice.
+  → "Actualizar toda la tabla"
 
-- Los campos en ROJO del documento se completan manualmente:
-    [NOMBRE DEL CLIENTE], fecha, tipo de caja, etc.
+- Si algun campo aparece en ROJO en el documento, significa
+  que se dejo vacio al generar. Completarlo manualmente.
+
+- La API key de ZAP se guarda en config_user.json (no se
+  sube al repositorio). Cada maquina tiene la suya.
 
 ===============================================================
-
-cd C:\Users\21231\AppData\Local\Programs\Python\Python314\python.exe main.py
-
-
-Debemos hacer tipo un txt de que librerias instalar para que funcione todo este proyecto.
-
-Crear requirements.txt con todas las dependencias
-Agregar comentarios claros en config.py sobre qué debe cambiar cada usuario
-Alinear el puerto (¿8080 o 8081?)
-Limpiar _actualizar_toc_con_word correctamente
