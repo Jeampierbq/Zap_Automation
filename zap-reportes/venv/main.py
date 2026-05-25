@@ -1252,6 +1252,7 @@ def _flujo_generar_word():
     carpeta_json = Path(__file__).parent / config.CARPETA_JSON
 
     while True:
+        limpiar()
         disponibles = sorted(carpeta_json.glob("filtrado_*.json"), key=os.path.getmtime)
 
         if not disponibles:
@@ -1395,7 +1396,11 @@ def _flujo_generar_word():
     ruta_word = generar_word_plantilla(lista_sitios, config.CARPETA_SALIDA,
                                        cliente=cliente, fecha=fecha_informe,
                                        tipo_caja=tipo_caja)
-    ok(f"Word generado: {ruta_word}\n")
+    ok(f"Word generado: {ruta_word}")
+    try:
+        input("\n  Presiona Enter para volver al menú...")
+    except (EOFError, KeyboardInterrupt):
+        pass
 
 def main():
     _cargar_config_usuario()
