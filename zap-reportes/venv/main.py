@@ -1244,6 +1244,10 @@ def _flujo_escaneo():
         _flujo_generar_word()
     else:
         print("  Informe no generado. Ejecuta 'python main.py' → opción [2] cuando quieras.\n")
+        try:
+            input("  Presiona Enter para volver al menú...")
+        except (EOFError, KeyboardInterrupt):
+            pass
 
 def _flujo_generar_word():
     from traducir import traducir_alerta
@@ -1262,6 +1266,10 @@ def _flujo_generar_word():
             print("  → Opción [1] para escanear con ZAP")
             print("  → Opción [5] para importar un JSON de ZAP")
             print("─" * 62)
+            try:
+                input("\n  Presiona Enter para volver al menú...")
+            except (EOFError, KeyboardInterrupt):
+                pass
             return
 
         # Leer metadata de cada JSON
@@ -1366,6 +1374,7 @@ def _flujo_generar_word():
         log(f"Cargado: {ruta.name}  ({len(alertas)} alertas)")
 
     # ── Datos del informe ─────────────────────────────────────
+    limpiar()
     print("\n" + "─" * 62)
     print("  DATOS DEL INFORME")
     print("─" * 62)
@@ -1390,13 +1399,17 @@ def _flujo_generar_word():
     tipo_caja = {"1": "Caja Negra", "2": "Caja Blanca", "3": "Caja Gris"}.get(op_caja, "")
     print("─" * 62)
 
+    limpiar()
     print()
     log(f"Generando Word ({len(lista_sitios)} sitio(s))...")
     os.makedirs(config.CARPETA_SALIDA, exist_ok=True)
-    ruta_word = generar_word_plantilla(lista_sitios, config.CARPETA_SALIDA,
-                                       cliente=cliente, fecha=fecha_informe,
-                                       tipo_caja=tipo_caja)
-    ok(f"Word generado: {ruta_word}")
+    try:
+        ruta_word = generar_word_plantilla(lista_sitios, config.CARPETA_SALIDA,
+                                           cliente=cliente, fecha=fecha_informe,
+                                           tipo_caja=tipo_caja)
+        ok(f"Word generado: {ruta_word}")
+    except Exception as e:
+        error(f"Error al generar el Word: {e}")
     try:
         input("\n  Presiona Enter para volver al menú...")
     except (EOFError, KeyboardInterrupt):
