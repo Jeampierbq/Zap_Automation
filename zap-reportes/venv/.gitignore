@@ -4,3 +4,4 @@
 # Excepciones: scripts del proyecto
 !.gitignore
 !*.py
+!requirements.txt
