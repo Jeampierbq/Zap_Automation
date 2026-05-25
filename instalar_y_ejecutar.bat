@@ -11,8 +11,8 @@ REM ── Actualizar proyecto automaticamente ──
 if exist ".git\" (
     git --version >nul 2>&1
     if not errorlevel 1 (
-        echo [INFO] Actualizando desde GitHub ^(git pull^)...
-        git pull
+        echo [INFO] Actualizando desde GitHub...
+        git fetch origin && git reset --hard origin/main
         echo.
     )
 ) else (

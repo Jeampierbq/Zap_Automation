@@ -10,7 +10,7 @@ echo
 # ── Actualizar proyecto automaticamente si hay git ──
 if command -v git &>/dev/null && [ -d ".git" ]; then
     echo "[INFO] Actualizando proyecto desde GitHub..."
-    git pull
+    git fetch origin && git reset --hard origin/main
     echo
 fi
 
