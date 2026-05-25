@@ -7,6 +7,14 @@ echo   ZAP AUTOMATION - Instalacion completa desde cero
 echo ============================================================
 echo.
 
+REM ── Actualizar proyecto automaticamente si hay git ──
+git --version >nul 2>&1
+if not errorlevel 1 (
+    echo [INFO] Actualizando proyecto desde GitHub...
+    git pull
+    echo.
+)
+
 REM ── Buscar Python (python / python3 / py launcher) ──
 set PYTHON_CMD=
 for %%c in (python python3 py) do (

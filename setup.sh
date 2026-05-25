@@ -1,8 +1,17 @@
 #!/bin/bash
+cd "$(dirname "$0")"
+
 echo "============================================================"
 echo "  ZAP AUTOMATION - Instalacion completa desde cero"
 echo "============================================================"
 echo
+
+# ── Actualizar proyecto automaticamente si hay git ──
+if command -v git &>/dev/null; then
+    echo "[INFO] Actualizando proyecto desde GitHub..."
+    git pull
+    echo
+fi
 
 # ── Buscar Python ──
 PYTHON_CMD=""
