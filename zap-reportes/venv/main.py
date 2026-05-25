@@ -11,6 +11,10 @@ import config
 
 BASE = f"http://{config.ZAP_HOST}:{config.ZAP_PORT}"
 
+_BASE_DIR       = Path(__file__).parent
+_CARPETA_SALIDA = str(_BASE_DIR / config.CARPETA_SALIDA)
+_CARPETA_JSON   = str(_BASE_DIR / config.CARPETA_JSON)
+
 def _key():
     return config.ZAP_API_KEY
 
@@ -464,8 +468,8 @@ def exportar_json_y_filtrar(url):
     subtitulo("Exportando JSON (igual que manual) y filtrando")
     dominio = dominio_de(url)
     nombre  = nombre_limpio(url)
-    os.makedirs(config.CARPETA_SALIDA, exist_ok=True)
-    os.makedirs(config.CARPETA_JSON,   exist_ok=True)
+    os.makedirs(_CARPETA_SALIDA, exist_ok=True)
+    os.makedirs(_CARPETA_JSON,   exist_ok=True)
 
     # ── CLAVE: usar el mismo endpoint que ZAP usa al exportar manualmente
     # Este endpoint devuelve el JSON con riskcode, instances, desc, etc.
@@ -554,7 +558,7 @@ def exportar_json_y_filtrar(url):
 
     # Guardar JSON filtrado (con timestamp para no colisionar con runs anteriores)
     timestamp     = time.strftime('%Y%m%d_%H%M%S')
-    ruta_filtrado = os.path.join(config.CARPETA_JSON, f"filtrado_{nombre}_{timestamp}.json")
+    ruta_filtrado = os.path.join(_CARPETA_JSON, f"filtrado_{nombre}_{timestamp}.json")
     with open(ruta_filtrado, "w", encoding="utf-8") as f:
         json.dump({
             "url_objetivo":    url,
@@ -1402,9 +1406,9 @@ def _flujo_generar_word():
     limpiar()
     print()
     log(f"Generando Word ({len(lista_sitios)} sitio(s))...")
-    os.makedirs(config.CARPETA_SALIDA, exist_ok=True)
+    os.makedirs(_CARPETA_SALIDA, exist_ok=True)
     try:
-        ruta_word = generar_word_plantilla(lista_sitios, config.CARPETA_SALIDA,
+        ruta_word = generar_word_plantilla(lista_sitios, _CARPETA_SALIDA,
                                            cliente=cliente, fecha=fecha_informe,
                                            tipo_caja=tipo_caja)
         ok(f"Word generado: {ruta_word}")
