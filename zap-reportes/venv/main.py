@@ -20,6 +20,7 @@ def warn(msg):      print(f"  [AVISO] {msg}")
 def error(msg):     print(f"  [ERROR] {msg}")
 def titulo(msg):    print(f"\n{'='*62}\n  {msg}\n{'='*62}")
 def subtitulo(msg): print(f"\n  -- {msg} --")
+def limpiar():      os.system('cls' if os.name == 'nt' else 'clear')
 
 # Reglas ZAP no relevantes para auditorías web modernas (se deshabilitan en OWASP_Web)
 _REGLAS_DESHABILITAR = ["30001", "30002", "90024", "90026", "90029"]
@@ -849,6 +850,7 @@ def _conectar_zap():
 
 def _menu_urls():
     while True:
+        limpiar()
         print("\n" + "─" * 62)
         print("  URLs a escanear:")
         print("─" * 62)
@@ -939,6 +941,7 @@ def _menu_urls():
 
 def _menu_configuracion():
     while True:
+        limpiar()
         key = config.ZAP_API_KEY
         key_display = (key[:4] + "****") if len(key) > 4 else "****"
         print("\n" + "─" * 62)
@@ -1035,6 +1038,7 @@ def _flujo_importar_zap_json():
 
 def _menu_gestionar_urls():
     while True:
+        limpiar()
         print("\n" + "─" * 62)
         print("  URLs configuradas:")
         print("─" * 62)
@@ -1118,6 +1122,7 @@ def _menu_gestionar_urls():
 
 def _menu_inicio():
     while True:
+        limpiar()
         key = config.ZAP_API_KEY
         if not key or key in ("x", "your_key_here"):
             key_display = "[NO CONFIGURADO]"
