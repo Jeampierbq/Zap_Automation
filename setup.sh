@@ -1,5 +1,6 @@
 #!/bin/bash
-cd "$(dirname "$0")"
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+cd "$ROOT"
 
 echo "============================================================"
 echo "  ZAP AUTOMATION - Instalacion completa desde cero"
@@ -7,7 +8,7 @@ echo "============================================================"
 echo
 
 # ── Actualizar proyecto automaticamente si hay git ──
-if command -v git &>/dev/null; then
+if command -v git &>/dev/null && [ -d ".git" ]; then
     echo "[INFO] Actualizando proyecto desde GitHub..."
     git pull
     echo
@@ -27,7 +28,7 @@ if [ -z "$PYTHON_CMD" ]; then
     echo "[INFO] Python no encontrado. Instalando automaticamente..."
     echo
     if command -v apt-get &>/dev/null; then
-        sudo apt-get update -qq && sudo apt-get install -y python3 python3-pip
+        sudo apt-get update -qq && sudo apt-get install -y python3 python3-pip python3-venv
     elif command -v dnf &>/dev/null; then
         sudo dnf install -y python3 python3-pip
     elif command -v yum &>/dev/null; then
@@ -55,12 +56,28 @@ fi
 
 echo "[OK] Python listo ($PYTHON_CMD)."
 echo
+
+# ── Crear entorno virtual si no existe ──
+VENV="$ROOT/.venv"
+if [ ! -d "$VENV" ]; then
+    echo "[INFO] Creando entorno virtual..."
+    "$PYTHON_CMD" -m venv "$VENV" 2>/dev/null
+    if [ $? -ne 0 ]; then
+        echo "[INFO] Instalando python3-venv..."
+        sudo apt-get install -y python3-venv python3-full 2>/dev/null || \
+        sudo dnf install -y python3-venv 2>/dev/null
+        "$PYTHON_CMD" -m venv "$VENV"
+    fi
+fi
+
+PYTHON_VENV="$VENV/bin/python"
+PIP_VENV="$VENV/bin/pip"
+
 echo "[INFO] Instalando dependencias..."
-"$PYTHON_CMD" -m pip install -r zap-reportes/venv/requirements.txt
+"$PIP_VENV" install -r "$ROOT/zap-reportes/venv/requirements.txt"
 if [ $? -ne 0 ]; then
     echo
-    echo "[ERROR] Fallo la instalacion. Intenta con sudo:"
-    echo "        sudo $PYTHON_CMD -m pip install -r zap-reportes/venv/requirements.txt"
+    echo "[ERROR] Fallo la instalacion de dependencias."
     exit 1
 fi
 
@@ -69,5 +86,5 @@ echo "============================================================"
 echo "  Instalacion completada. Iniciando programa..."
 echo "============================================================"
 echo
-cd zap-reportes/venv
-"$PYTHON_CMD" main.py
+cd "$ROOT/zap-reportes/venv"
+"$PYTHON_VENV" main.py

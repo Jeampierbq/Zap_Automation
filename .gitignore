@@ -21,6 +21,9 @@ __pycache__/
 # Configuración local con API key (nunca subir al repo)
 zap-reportes/venv/config_user.json
 
+# Entorno virtual Linux/Mac
+.venv/
+
 # Configuración local de Claude Code (no subir al repo)
 .claude/
 
