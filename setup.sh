@@ -1,7 +1,7 @@
 #!/bin/bash
-echo "================================================"
-echo "  ZAP Automation - Instalacion de dependencias"
-echo "================================================"
+echo "============================================================"
+echo "  ZAP AUTOMATION - Instalacion y arranque"
+echo "============================================================"
 echo
 
 if ! command -v python3 &> /dev/null; then
@@ -16,13 +16,14 @@ pip3 install -r zap-reportes/venv/requirements.txt
 if [ $? -ne 0 ]; then
     echo
     echo "[ERROR] Fallo la instalacion. Intenta manualmente:"
-    echo "        pip3 install requests python-docx"
+    echo "        pip3 install requests python-docx lxml matplotlib deep_translator"
     exit 1
 fi
 
 echo
-echo "[OK] Todo instalado correctamente."
+echo "============================================================"
+echo "  Instalacion completada. Iniciando programa..."
+echo "============================================================"
 echo
-echo "Para ejecutar el programa:"
-echo "  cd zap-reportes/venv"
-echo "  python3 main.py"
+cd zap-reportes/venv
+python3 main.py
