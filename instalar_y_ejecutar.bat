@@ -7,11 +7,17 @@ echo   ZAP AUTOMATION - Instalacion completa desde cero
 echo ============================================================
 echo.
 
-REM ── Actualizar proyecto automaticamente si hay git ──
-git --version >nul 2>&1
-if not errorlevel 1 (
-    echo [INFO] Actualizando proyecto desde GitHub...
-    git pull
+REM ── Actualizar proyecto automaticamente ──
+if exist ".git\" (
+    git --version >nul 2>&1
+    if not errorlevel 1 (
+        echo [INFO] Actualizando desde GitHub ^(git pull^)...
+        git pull
+        echo.
+    )
+) else (
+    echo [INFO] Descargando ultima version desde GitHub...
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "$p='%~dp0'; $z=[IO.Path]::Combine($env:TEMP,'zap_upd.zip'); $e=[IO.Path]::Combine($env:TEMP,'zap_upd'); try { iwr 'https://github.com/Jeampierbq/Zap_Automation/archive/refs/heads/main.zip' -OutFile $z -UseBasicParsing; Expand-Archive $z $e -Force; Copy-Item (Join-Path $e 'Zap_Automation-main' '*') $p -Recurse -Force; Remove-Item $z,$e -Recurse -Force; Write-Host '[OK] Proyecto actualizado.' } catch { Write-Host '[WARN] Sin conexion. Continuando con version actual.' }"
     echo.
 )
 
