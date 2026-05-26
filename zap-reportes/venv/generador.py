@@ -1075,6 +1075,42 @@ def generar_word_plantilla(lista_sitios, carpeta_salida,
     if fecha is None:
         fecha = datetime.now().strftime('%d/%m/%Y')
 
+    # Corregir typo en la plantilla: "VULNERABILIDADES" → "VULNERABILIDAD"
+    # Usa ensamblado de runs para manejar el caso donde Word fragmenta el texto en varios runs.
+    _OLD = 'ANÁLISIS DE VULNERABILIDADES'
+    _NEW = 'ANÁLISIS DE VULNERABILIDAD'
+    def _fix_typo_en_parrafos(contenedor):
+        for p_elem in contenedor.iter(qn('w:p')):
+            tokens = [
+                (r, t)
+                for r in p_elem.iter(qn('w:r'))
+                for t in r.findall(qn('w:t'))
+                if t.text
+            ]
+            full_text = ''.join(t.text for _, t in tokens)
+            if _OLD not in full_text:
+                continue
+            ph_start = full_text.index(_OLD)
+            ph_end   = ph_start + len(_OLD)
+            pos = 0
+            primer_overlap = True
+            for r_elem, t_elem in tokens:
+                tok_ini = pos
+                tok_fin = pos + len(t_elem.text)
+                pos = tok_fin
+                if tok_fin <= ph_start or tok_ini >= ph_end:
+                    continue
+                antes   = t_elem.text[:max(0, ph_start - tok_ini)]
+                despues = t_elem.text[max(0, ph_end   - tok_ini):]
+                if primer_overlap:
+                    t_elem.text = antes + _NEW + despues
+                    primer_overlap = False
+                else:
+                    t_elem.text = antes + despues
+    for txbx in body.iter(qn('w:txbxContent')):
+        _fix_typo_en_parrafos(txbx)
+    _fix_typo_en_parrafos(body)
+
     # Tabla 1 y Tabla 2 ya existen en la plantilla → contador empieza en 2
     contador = _Contador()
     contador.tabla  = 2
