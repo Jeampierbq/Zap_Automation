@@ -27,7 +27,16 @@ def convertir(ruta_json):
 
         alertas_raw = sitio.get("alerts", [])
         alertas = []
+        conf_min = getattr(config, 'CONFIANZA_MINIMA', 3)
         for a in alertas_raw:
+            # Descartar hallazgos con confianza menor a la mínima
+            # (Media/Baja = potenciales falsos positivos)
+            try:
+                conf = int(a.get("confidence", 0) or 0)
+            except (ValueError, TypeError):
+                conf = 0
+            if conf < conf_min:
+                continue
             instancias = [
                 {
                     "uri":      inst.get("uri", ""),

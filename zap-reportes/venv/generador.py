@@ -114,7 +114,7 @@ RIESGO_COLOR = {
     '0': RGBColor(0x44,0x72,0xC4),
 }
 RIESGO_BG = {'3':'FFDADA','2':'FFE8CC','1':'DAEEF3','0':'DAE8FC'}
-CONF_LABEL = {'3':'Alta','2':'Media','1':'Baja','0':'Confirmado'}
+CONF_LABEL = {'4':'Confirmada','3':'Alta','2':'Media','1':'Baja','0':'Falso Positivo'}
 
 def riesgo_label(c): return RIESGO_LABEL.get(str(c), str(c))
 def riesgo_color(c): return RIESGO_COLOR.get(str(c), RGBColor(0x88,0x88,0x88))

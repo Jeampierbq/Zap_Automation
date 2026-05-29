@@ -547,6 +547,15 @@ def exportar_json_y_filtrar(url):
         if informativos:
             log(f"Informativos excluidos: {len(informativos)} (no se incluyen en Word ni JSON)")
 
+    # Filtrar por confianza mínima (descarta Media/Baja — potenciales falsos positivos)
+    conf_min = getattr(config, 'CONFIANZA_MINIMA', 3)
+    antes_conf = len(alertas_dominio)
+    alertas_dominio = [a for a in alertas_dominio if _confianza(a) >= conf_min]
+    descartadas_conf = antes_conf - len(alertas_dominio)
+    if descartadas_conf:
+        log(f"Hallazgos descartados por confianza menor a Alta: {descartadas_conf} "
+            f"(solo se conserva confianza >= {conf_min})")
+
     # Ordenar Alto > Medio > Bajo
     orden = {"3":0,"2":1,"1":2}
     alertas_dominio.sort(
@@ -675,12 +684,22 @@ def _score_relevancia(alerta):
     return score
 
 
+def _confianza(alerta):
+    """Nivel de confianza del hallazgo como entero (0-4). Robusto a None/str/vacío."""
+    try:
+        return int(alerta.get('confidence', 0) or 0)
+    except (ValueError, TypeError):
+        return 0
+
+
 def priorizar_alertas(alertas):
     """
     Reglas de selección para el Word:
+      Solo se consideran hallazgos con confianza >= CONFIANZA_MINIMA (config),
+      por defecto Alta/Confirmada — se descartan Media/Baja (falsos positivos).
       Alto  → todos sin límite
-      Medio → máximo 2, confianza >= Media, mayor score de relevancia
-      Bajo  → máximo 2, confianza >= Media, mayor score de relevancia
+      Medio → máximo 3, mayor score de relevancia
+      Bajo  → máximo 2, mayor score de relevancia
     Primero deduplica por nombre conservando el de más instancias.
     """
     # Deduplicar por nombre, conservar el de más instancias
@@ -692,17 +711,20 @@ def priorizar_alertas(alertas):
             por_nombre[nombre] = a
     alertas = list(por_nombre.values())
 
+    # Filtrar por confianza mínima (por defecto solo Alta/Confirmada);
+    # descarta Media/Baja, considerados potenciales falsos positivos.
+    conf_min = getattr(config, 'CONFIANZA_MINIMA', 3)
+    alertas = [a for a in alertas if _confianza(a) >= conf_min]
+
     UMBRAL_MEDIO = 50
     UMBRAL_BAJO  = 65
 
     altos  = [a for a in alertas if str(a.get('riskcode','0')) == '3']
     medios = [a for a in alertas
               if str(a.get('riskcode','0')) == '2'
-              and int(a.get('confidence', 0)) >= 2
               and _score_relevancia(a) >= UMBRAL_MEDIO]
     bajos  = [a for a in alertas
               if str(a.get('riskcode','0')) == '1'
-              and int(a.get('confidence', 0)) >= 2
               and _score_relevancia(a) >= UMBRAL_BAJO]
 
     medios_top = sorted(medios, key=_score_relevancia, reverse=True)[:3]

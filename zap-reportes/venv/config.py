@@ -20,6 +20,12 @@ AJAX_MAX_CRAWL_DEPTH = 10
 SCAN_POLICY          = "OWASP_Web"
 EXCLUIR_INFORMATIVOS = True
 
+# Confianza mínima del hallazgo para incluirlo en el JSON y el informe.
+# Niveles ZAP: 1=Baja, 2=Media, 3=Alta, 4=Confirmada.
+# Por defecto 3: solo se reportan hallazgos con confianza Alta o Confirmada,
+# descartando los de confianza Media/Baja (potenciales falsos positivos).
+CONFIANZA_MINIMA = 3
+
 # ── Gestión de recursos entre escaneos ──────────────────────────────
 PAUSA_ENTRE_URLS  = 60    # segundos de pausa entre cada URL (permite liberar RAM y CPU)
 TAMANO_LOTE       = 5     # cada cuántas URLs hacer una pausa larga
