@@ -548,6 +548,13 @@ def _activar_update_fields(doc):
     settings.append(uf)
 
 
+def _desactivar_update_fields_en_doc(doc):
+    """Elimina w:updateFields del doc en memoria para que Word no pregunte al abrir."""
+    settings = doc.settings.element
+    for uf in settings.findall(qn('w:updateFields')):
+        settings.remove(uf)
+
+
 def _actualizar_toc_con_word(ruta_docx):
     """Abre el docx con Word en segundo plano, actualiza el índice y guarda. Sin ventanas."""
     try:
@@ -565,7 +572,23 @@ def _actualizar_toc_con_word(ruta_docx):
         word.Quit()
         pythoncom.CoUninitialize()
     except Exception:
-        pass  # Si Word no está disponible, el TOC se actualiza al abrir manualmente
+        pass
+    finally:
+        # Siempre eliminar el flag updateFields para suprimir el diálogo al abrir
+        _desactivar_update_fields(ruta_docx)
+
+
+def _desactivar_update_fields(ruta_docx):
+    """Quita w:updateFields del documento para suprimir el diálogo al abrir en Word."""
+    try:
+        from docx import Document as _Document
+        d = _Document(ruta_docx)
+        settings = d.settings.element
+        for uf in settings.findall(qn('w:updateFields')):
+            settings.remove(uf)
+        d.save(ruta_docx)
+    except Exception:
+        pass
 
 
 def _p_get_text(elem):
@@ -1119,8 +1142,8 @@ def generar_word_plantilla(lista_sitios, carpeta_salida,
     # ── 1. Actualizar placeholders de portada ────────────────
     _fix_cliente_fecha(doc, fecha, cliente)
 
-    # ── 1b. Activar actualización automática del índice al abrir ──
-    _activar_update_fields(doc)
+    # ── 1b. Desactivar actualización automática del índice al abrir (suprime el diálogo de Word) ──
+    _desactivar_update_fields_en_doc(doc)
 
     # ── 1c. Actualizar textos estáticos (intro, informativo, etc.) ──
     _parchar_textos_plantilla(doc, cliente, tipo_caja)
