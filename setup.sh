@@ -73,7 +73,12 @@ fi
 PYTHON_VENV="$VENV/bin/python"
 PIP_VENV="$VENV/bin/pip"
 
+echo "[INFO] Actualizando pip..."
+"$PIP_VENV" install --upgrade pip >/dev/null 2>&1
 echo "[INFO] Instalando dependencias..."
+# Nota: pywin32 (en requirements.txt) solo se instala en Windows; en Linux pip lo
+# ignora por el marcador de plataforma. El indice del Word se actualizara al abrir
+# el documento en una maquina con Microsoft Word.
 "$PIP_VENV" install -r "$ROOT/zap-reportes/venv/requirements.txt"
 if [ $? -ne 0 ]; then
     echo

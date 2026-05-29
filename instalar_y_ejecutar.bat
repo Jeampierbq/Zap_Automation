@@ -68,7 +68,10 @@ pause & exit /b 1
 :python_listo
 echo [OK] Python listo.
 echo.
+echo [INFO] Actualizando pip...
+%PYTHON_CMD% -m pip install --upgrade pip >nul 2>&1
 echo [INFO] Instalando dependencias...
+echo        (incluye pywin32: actualiza el indice del Word automaticamente)
 %PYTHON_CMD% -m pip install -r zap-reportes\venv\requirements.txt
 if errorlevel 1 (
     echo.

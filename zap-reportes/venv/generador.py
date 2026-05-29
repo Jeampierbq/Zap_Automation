@@ -202,13 +202,33 @@ def generar_grafico_barras(counts):
     except Exception:
         return None
 
-def _insertar_figura(doc, grafico_buf, contador, titulo, ancho=Inches(4.5)):
-    """Inserta imagen + caption 'Figura N  titulo' (APA 7: caption debajo)."""
+def _envolver_en_bookmark(run, nombre):
+    """Coloca bookmarkStart antes del run y bookmarkEnd después (mismo párrafo).
+
+    Permite que el paso de Word (win32com) localice la imagen y la reemplace por
+    un gráfico nativo editable.
+    """
+    bid = str(abs(hash(nombre)) % 100000)
+    bs = OxmlElement('w:bookmarkStart'); bs.set(qn('w:id'), bid); bs.set(qn('w:name'), nombre)
+    be = OxmlElement('w:bookmarkEnd');   be.set(qn('w:id'), bid)
+    run._r.addprevious(bs)
+    run._r.addnext(be)
+
+
+def _insertar_figura(doc, grafico_buf, contador, titulo, ancho=Inches(4.5), bookmark=None):
+    """Inserta imagen + caption 'Figura N  titulo' (APA 7: caption debajo).
+
+    Si se indica `bookmark`, la imagen queda marcada para que Word la reemplace
+    por un gráfico de barras nativo editable (ver _actualizar_toc_con_word).
+    """
     p_img = doc.add_paragraph()
     p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p_img.paragraph_format.space_before = Pt(8)
     p_img.paragraph_format.space_after  = Pt(2)
-    p_img.add_run().add_picture(grafico_buf, width=ancho)
+    run_img = p_img.add_run()
+    run_img.add_picture(grafico_buf, width=ancho)
+    if bookmark:
+        _envolver_en_bookmark(run_img, bookmark)
 
     num = contador.sig_figura() if contador else 1
     p_cap = doc.add_paragraph()
@@ -548,34 +568,121 @@ def _activar_update_fields(doc):
     settings.append(uf)
 
 
-def _desactivar_update_fields_en_doc(doc):
-    """Elimina w:updateFields del doc en memoria para que Word no pregunte al abrir."""
-    settings = doc.settings.element
-    for uf in settings.findall(qn('w:updateFields')):
-        settings.remove(uf)
+def _rgb_office(hex_color):
+    """Convierte 'C00000' al entero BGR que usa Office (.ForeColor.RGB)."""
+    r = int(hex_color[0:2], 16)
+    g = int(hex_color[2:4], 16)
+    b = int(hex_color[4:6], 16)
+    return r + g * 256 + b * 65536
 
 
-def _actualizar_toc_con_word(ruta_docx):
-    """Abre el docx con Word en segundo plano, actualiza el índice y guarda. Sin ventanas."""
+def _insertar_grafico_barras_nativo(doc, bookmark, counts,
+                                    titulo='Distribución de Vulnerabilidad por Severidad'):
+    """Reemplaza la imagen marcada por `bookmark` con un gráfico de barras NATIVO
+    de Office (editable: clic derecho → Editar datos → la barra se actualiza).
+    """
+    if not doc.Bookmarks.Exists(bookmark):
+        return False
+    # Borrar la imagen PNG (fallback) que ocupa el bookmark. Al quitar la imagen,
+    # Word elimina el bookmark, pero el objeto Range sobrevive como punto de
+    # inserción → se REUTILIZA el mismo rng (no re-pedir doc.Bookmarks(...)).
+    rng = doc.Bookmarks(bookmark).Range
+    for shp in list(rng.InlineShapes):
+        shp.Delete()
+    XL_COLUMN_CLUSTERED = 51
+    shp = doc.InlineShapes.AddChart2(-1, XL_COLUMN_CLUSTERED, rng)
+    chart = shp.Chart
+
+    # Cargar los datos (Alto / Medio / Bajo) en el Excel embebido
+    cd = chart.ChartData
+    cd.Activate()
+    ws = cd.Workbook.Worksheets(1)
+    ws.UsedRange.Clear()
+    ws.Cells(1, 1).Value = ''
+    ws.Cells(1, 2).Value = 'Hallazgos'
+    filas = [('Alto', 'C00000'), ('Medio', 'ED7D31'), ('Bajo', '0070C0')]
+    for i, (etiqueta, _) in enumerate(filas, start=2):
+        ws.Cells(i, 1).Value = etiqueta
+        ws.Cells(i, 2).Value = int(counts.get(etiqueta, 0))
+    chart.SetSourceData("'" + ws.Name + "'!$A$1:$B$4")
+
+    # Variar color por categoría (para que la leyenda muestre Alto/Medio/Bajo)
+    serie = chart.SeriesCollection(1)
+    try:
+        chart.ChartGroups(1).VaryByCategories = True
+    except Exception:
+        pass
+    # Colorear cada barra con el color de severidad del documento
+    for i, (_, hexcol) in enumerate(filas, start=1):
+        try:
+            serie.Points(i).Format.Fill.ForeColor.RGB = _rgb_office(hexcol)
+        except Exception:
+            pass
+    # Etiquetas de datos sobre cada barra
+    try:
+        serie.HasDataLabels = True
+    except Exception:
+        pass
+    # Título del gráfico
+    try:
+        chart.HasTitle = True
+        chart.ChartTitle.Text = titulo
+    except Exception:
+        pass
+    # Leyenda en la parte inferior (muestra las categorías por color)
+    try:
+        chart.HasLegend = True
+        chart.Legend.Position = -4107  # xlLegendPositionBottom
+    except Exception:
+        pass
+    return True
+
+
+def _actualizar_toc_con_word(ruta_docx, graficos=None):
+    """Abre el docx con Word (invisible), inserta los gráficos nativos editables,
+    actualiza el índice y lo hornea en el XML.
+
+    Devuelve True si Word procesó y guardó el documento; False si pywin32/Word no
+    están disponibles (p. ej. Linux). En ese caso el flag updateFields se conserva
+    para que Word actualice el índice al abrir el archivo en otra máquina, y la
+    imagen del gráfico (PNG) se mantiene como respaldo.
+    """
     try:
         import win32com.client
         import pythoncom
+    except ImportError:
+        return False
+    word = None
+    try:
         pythoncom.CoInitialize()
         word = win32com.client.Dispatch("Word.Application")
         word.Visible = False
         word.DisplayAlerts = False
         doc = word.Documents.Open(os.path.abspath(ruta_docx))
+        # 1) Actualizar campos e índice PRIMERO
         doc.Fields.Update()
-        doc.TablesOfContents(1).Update()
+        if doc.TablesOfContents.Count > 0:
+            doc.TablesOfContents(1).Update()
+        # 2) Insertar los gráficos nativos AL FINAL: doc.Fields.Update() resetea a
+        #    sus datos de ejemplo cualquier gráfico insertado antes, por eso van
+        #    después de actualizar los campos.
+        for g in (graficos or []):
+            try:
+                _insertar_grafico_barras_nativo(doc, g['bookmark'], g['counts'])
+            except Exception:
+                pass  # si falla un gráfico, se conserva su imagen PNG
         doc.Save()
         doc.Close()
-        word.Quit()
-        pythoncom.CoUninitialize()
+        return True
     except Exception:
-        pass
+        return False
     finally:
-        # Siempre eliminar el flag updateFields para suprimir el diálogo al abrir
-        _desactivar_update_fields(ruta_docx)
+        try:
+            if word is not None:
+                word.Quit()
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass
 
 
 def _desactivar_update_fields(ruta_docx):
@@ -1142,8 +1249,10 @@ def generar_word_plantilla(lista_sitios, carpeta_salida,
     # ── 1. Actualizar placeholders de portada ────────────────
     _fix_cliente_fecha(doc, fecha, cliente)
 
-    # ── 1b. Desactivar actualización automática del índice al abrir (suprime el diálogo de Word) ──
-    _desactivar_update_fields_en_doc(doc)
+    # ── 1b. Marcar el índice para actualización (fallback si Word no horneó el TOC) ──
+    # En el guardado final se intenta hornear el índice con Word y, si lo logra,
+    # se quita este flag para que el documento abra sin el diálogo de actualización.
+    _activar_update_fields(doc)
 
     # ── 1c. Actualizar textos estáticos (intro, informativo, etc.) ──
     _parchar_textos_plantilla(doc, cliente, tipo_caja)
@@ -1198,9 +1307,13 @@ def generar_word_plantilla(lista_sitios, carpeta_salida,
     # Gráfico global
     counts_global = {'Alto': total_alto, 'Medio': total_medio, 'Bajo': total_bajo}
     grafico_global = generar_grafico_barras(counts_global)
+    graficos_nativos = []
     if grafico_global:
         _insertar_figura(doc, grafico_global, contador,
-                         'Distribución global de niveles de riesgo')
+                         'Distribución global de niveles de riesgo',
+                         bookmark='GRAFICO_RIESGO_GLOBAL')
+        graficos_nativos.append({'bookmark': 'GRAFICO_RIESGO_GLOBAL',
+                                 'counts': counts_global})
 
     # Heading de hallazgos
     _heading_en_plantilla(doc, 1, '5. Resumen de Hallazgos Identificados por URL')
@@ -1233,6 +1346,11 @@ def generar_word_plantilla(lista_sitios, carpeta_salida,
     codigo = uuid.uuid4().hex[:12].upper()
     ruta = os.path.join(carpeta_salida, f'reporte_consolidado_{codigo}.docx')
     doc.save(ruta)
-    _actualizar_toc_con_word(ruta)
+    # Hornear el índice con Word (Windows). Si lo logra, quitar el flag updateFields
+    # para que el documento abra sin el diálogo "¿Desea actualizar los campos?".
+    # Si Word no está disponible (Linux), el flag se mantiene y el índice se
+    # actualiza al abrir el archivo en una máquina con Word.
+    if _actualizar_toc_con_word(ruta, graficos=graficos_nativos):
+        _desactivar_update_fields(ruta)
     return ruta
 

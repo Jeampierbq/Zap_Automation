@@ -4,6 +4,31 @@
 
 
 ===============================================================
+  REQUISITOS PREVIOS
+===============================================================
+
+- OWASP ZAP instalado y corriendo
+  Descarga: https://www.zaproxy.org/download/
+
+- Python 3 instalado
+  Descarga: https://python.org
+  (En Windows, marcar "Add Python to PATH" al instalar)
+
+- Firefox (recomendado) o Google Chrome
+  Necesario para el escaneo AJAX de sitios modernos (SPA).
+
+- WINDOWS: Microsoft Word instalado (recomendado)
+  Permite que el indice del informe se actualice solo y que el
+  documento abra sin pedir confirmacion. Si no tienes Word, el
+  informe igual se genera; el indice se actualiza al abrirlo en
+  cualquier maquina que si tenga Word.
+
+NOTA: el instalador (instalar_y_ejecutar.bat en Windows o
+setup.sh en Linux/Mac) instala automaticamente todas las
+librerias de Python necesarias. No hay que instalarlas a mano.
+
+
+===============================================================
   INSTALACION (solo la primera vez en cada maquina)
 ===============================================================
 
@@ -15,21 +40,22 @@ WINDOWS
 2. Clonar o copiar el proyecto a tu maquina.
 
 3. Doble clic en:  instalar_y_ejecutar.bat
-   Eso instala las dependencias y arranca el programa solo.
+   Eso instala las dependencias (incluido el soporte de Word
+   para el indice automatico) y arranca el programa solo.
 
 
 LINUX / MAC
 -----------
 1. Instalar Python 3:
-   sudo apt install python3 python3-pip   (Ubuntu/Debian)
-   brew install python3                   (Mac)
+   sudo apt install python3 python3-pip python3-venv   (Ubuntu/Debian/Kali)
+   brew install python3                                (Mac)
 
 2. Clonar o copiar el proyecto a tu maquina.
 
 3. Abrir terminal en la carpeta del proyecto y ejecutar:
    chmod +x setup.sh
    ./setup.sh
-   (chmod solo se necesita la primera vez)
+   (chmod solo se necesita la primera vez; luego basta ./setup.sh)
 
 
 ===============================================================
@@ -49,24 +75,26 @@ O directamente desde terminal:
    Linux/Mac:  cd zap-reportes/venv  &&  python3 main.py
 
 El menu interactivo permite:
-  [1] Escanear URLs y generar informe Word
-  [2] Solo generar Word (con JSONs ya existentes)
-  [3] Configuracion (API key, puerto ZAP, URLs)
-  [4] Importar JSON exportado de ZAP
+  [1] Ejecutar escaneo (escanea las URLs configuradas)
+  [2] Generar informe Word (con los JSON ya existentes)
+  [3] Configuracion (API key y puerto de ZAP)
+  [4] Gestionar URLs (agregar / eliminar URLs a escanear)
+  [5] Importar JSON de ZAP (exportado manualmente desde ZAP)
+  [0] Salir
 
 
 ===============================================================
   CONFIGURACION (primera vez o nuevo cliente)
 ===============================================================
 
-1. Abrir ZAP → Herramientas → Opciones → API
+1. Abrir ZAP -> Herramientas -> Opciones -> API
    Marcar "Habilitado" y copiar la Clave de API.
 
 2. En el menu del programa, ir a [3] Configuracion
    e ingresar la clave copiada. Se guarda automaticamente.
 
-3. Para cambiar las URLs a escanear, editar:
-   zap-reportes/venv/config.py  →  lista URLS
+3. Para agregar o quitar URLs a escanear, usar [4] Gestionar URLs
+   en el menu (se guardan automaticamente).
 
 
 ===============================================================
@@ -95,9 +123,12 @@ Pedira: nombre del cliente, fecha y tipo de caja.
   NOTAS
 ===============================================================
 
-- Despues de abrir el Word generado, actualizar el indice:
-  Clic derecho sobre el area del INDICE → "Actualizar campo"
-  → "Actualizar toda la tabla"
+- INDICE DEL INFORME:
+  En Windows con Microsoft Word instalado, el indice (tabla de
+  contenido) se actualiza AUTOMATICAMENTE al generar el informe
+  y el documento abre sin pedir confirmacion.
+  Si generas el informe en Linux/Mac (sin Word), el indice se
+  actualizara solo la primera vez que abras el .docx en Word.
 
 - Si algun campo aparece en ROJO en el documento, significa
   que se dejo vacio al generar. Completarlo manualmente.
