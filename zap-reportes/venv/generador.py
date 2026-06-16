@@ -604,7 +604,10 @@ def _insertar_grafico_barras_nativo(doc, bookmark, counts,
     for i, (etiqueta, _) in enumerate(filas, start=2):
         ws.Cells(i, 1).Value = etiqueta
         ws.Cells(i, 2).Value = int(counts.get(etiqueta, 0))
-    chart.SetSourceData("'" + ws.Name + "'!$A$1:$B$4")
+    # Usar objeto Range (no string) para que el vínculo persista en todas las
+    # versiones de Office; Refresh() fuerza la lectura inmediata de los datos.
+    chart.SetSourceData(ws.Range("A1:B4"))
+    chart.Refresh()
 
     # Variar color por categoría (para que la leyenda muestre Alto/Medio/Bajo)
     serie = chart.SeriesCollection(1)
@@ -669,8 +672,8 @@ def _actualizar_toc_con_word(ruta_docx, graficos=None):
         for g in (graficos or []):
             try:
                 _insertar_grafico_barras_nativo(doc, g['bookmark'], g['counts'])
-            except Exception:
-                pass  # si falla un gráfico, se conserva su imagen PNG
+            except Exception as _ge:
+                print(f"[WARN] Gráfico nativo falló ({g.get('bookmark')}): {_ge}")
         doc.Save()
         doc.Close()
         return True

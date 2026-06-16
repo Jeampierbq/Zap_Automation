@@ -1161,7 +1161,6 @@ def _menu_inicio():
         print("    ZAP AUTOMATION — GENERADOR DE INFORMES DE SEGURIDAD")
         print("=" * 62)
         print("  Desarrollado por : Jeampier Barrios")
-        print("  Contacto         : jeampierbarrios04@gmail.com")
         print("  Versión          : v1.0")
         print("─" * 62)
         print(f"  ZAP     : {config.ZAP_HOST}:{config.ZAP_PORT}")
