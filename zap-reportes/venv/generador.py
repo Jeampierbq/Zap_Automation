@@ -580,6 +580,9 @@ def _insertar_grafico_barras_nativo(doc, bookmark, counts,
                                     titulo='Distribución de Vulnerabilidad por Severidad'):
     """Reemplaza la imagen marcada por `bookmark` con un gráfico de barras NATIVO
     de Office (editable: clic derecho → Editar datos → la barra se actualiza).
+
+    Usa 3 series separadas (Alto/Medio/Bajo) en matriz diagonal para que cada
+    barra tenga su propio color y la leyenda muestre [■ Alto] [■ Medio] [■ Bajo].
     """
     if not doc.Bookmarks.Exists(bookmark):
         return False
@@ -593,51 +596,69 @@ def _insertar_grafico_barras_nativo(doc, bookmark, counts,
     shp = doc.InlineShapes.AddChart2(-1, XL_COLUMN_CLUSTERED, rng)
     chart = shp.Chart
 
-    # Cargar los datos (Alto / Medio / Bajo) en el Excel embebido
+    filas = [('Alto', 'C00000'), ('Medio', 'ED7D31'), ('Bajo', '0070C0')]
+    vals  = [int(counts.get(n, 0)) for n, _ in filas]
+
+    # ── Datos en Excel embebido ──────────────────────────────────────────────
+    # Matriz diagonal 3×3: cada columna = una serie (Alto/Medio/Bajo),
+    # cada fila = una categoría (Alto/Medio/Bajo). Solo la celda diagonal
+    # tiene valor; las demás son 0. Con Overlap=100 solo la barra no-cero
+    # es visible en cada posición del eje X.
+    #
+    #         Alto  Medio  Bajo
+    # Alto      3     0     0
+    # Medio     0     5     0
+    # Bajo      0     0     2
+    import time
     cd = chart.ChartData
     cd.Activate()
-    ws = cd.Workbook.Worksheets(1)
+    time.sleep(0.5)                          # esperar que el workbook embebido cargue
+    wb = cd.Workbook
+    ws = wb.Worksheets(1)
     ws.UsedRange.Clear()
     ws.Cells(1, 1).Value = ''
-    ws.Cells(1, 2).Value = 'Hallazgos'
-    filas = [('Alto', 'C00000'), ('Medio', 'ED7D31'), ('Bajo', '0070C0')]
-    for i, (etiqueta, _) in enumerate(filas, start=2):
-        ws.Cells(i, 1).Value = etiqueta
-        ws.Cells(i, 2).Value = int(counts.get(etiqueta, 0))
-    # Usar objeto Range (no string) para que el vínculo persista en todas las
-    # versiones de Office; Refresh() fuerza la lectura inmediata de los datos.
-    chart.SetSourceData(ws.Range("A1:B4"))
-    chart.Refresh()
+    for j, (nom, _) in enumerate(filas, start=2):
+        ws.Cells(1, j).Value = nom          # encabezados de serie
+    for i, (nom, _) in enumerate(filas, start=2):
+        ws.Cells(i, 1).Value = nom          # etiqueta de categoría
+        for j in range(2, 5):
+            ws.Cells(i, j).Value = vals[j - 2] if j == i else 0
+    wb.Close(SaveChanges=True)               # confirmar datos al Excel embebido
 
-    # Variar color por categoría (para que la leyenda muestre Alto/Medio/Bajo)
-    serie = chart.SeriesCollection(1)
+    # ── Formato ─────────────────────────────────────────────────────────────
+    # Overlap 100 %: en cada posición del eje X las 3 barras se superponen
+    # completamente; como solo una tiene valor > 0, visualmente queda una sola.
     try:
-        chart.ChartGroups(1).VaryByCategories = True
+        chart.ChartGroups(1).Overlap  = 100
+        chart.ChartGroups(1).GapWidth = 100
     except Exception:
         pass
-    # Colorear cada barra con el color de severidad del documento
-    for i, (_, hexcol) in enumerate(filas, start=1):
+
+    # Color, nombre y etiquetas por serie
+    for i, ((nom, hexcol), val) in enumerate(zip(filas, vals), start=1):
         try:
-            serie.Points(i).Format.Fill.ForeColor.RGB = _rgb_office(hexcol)
+            s = chart.SeriesCollection(i)
+            s.Name = nom                            # nombre visible en la leyenda
+            s.Format.Fill.ForeColor.RGB = _rgb_office(hexcol)
+            s.Format.Fill.Visible       = -1   # msoTrue
+            s.Format.Line.Visible       = 0    # sin borde
+            s.HasDataLabels             = val > 0
         except Exception:
             pass
-    # Etiquetas de datos sobre cada barra
+
+    # Sin título
     try:
-        serie.HasDataLabels = True
+        chart.HasTitle = False
     except Exception:
         pass
-    # Título del gráfico
+
+    # Leyenda abajo: [■ Alto] [■ Medio] [■ Bajo]
     try:
-        chart.HasTitle = True
-        chart.ChartTitle.Text = titulo
+        chart.HasLegend       = True
+        chart.Legend.Position = -4107   # xlLegendPositionBottom
     except Exception:
         pass
-    # Leyenda en la parte inferior (muestra las categorías por color)
-    try:
-        chart.HasLegend = True
-        chart.Legend.Position = -4107  # xlLegendPositionBottom
-    except Exception:
-        pass
+
     return True
 
 
