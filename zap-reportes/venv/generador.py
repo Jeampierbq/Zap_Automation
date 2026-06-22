@@ -623,7 +623,21 @@ def _insertar_grafico_barras_nativo(doc, bookmark, counts,
         ws.Cells(i, 1).Value = nom          # etiqueta de categoría
         for j in range(2, 5):
             ws.Cells(i, j).Value = vals[j - 2] if j == i else 0
-    wb.Close(SaveChanges=True)               # confirmar datos al Excel embebido
+    # Acotar el rango de origen a exactamente N+1 filas/columnas (encabezado + N
+    # categorías). AddChart2 deja por defecto 4 categorías; sin esto sobrevive un
+    # 4º punto fantasma (categoría vacía, valor 0) que mete una etiqueta "0" extra.
+    try:
+        n = len(filas)
+        rng_src = ws.Range(ws.Cells(1, 1), ws.Cells(n + 1, n + 1))
+        chart.SetSourceData("'" + ws.Name + "'!" + rng_src.Address)
+    except Exception:
+        pass
+    # CLAVE: Refresh() sincroniza el cache del gráfico (c:numCache en chart1.xml)
+    # con los datos recién escritos. Sin este paso, cerrar el workbook NO actualiza
+    # el cache y el gráfico conserva los datos de ejemplo de AddChart2
+    # (Categoría 1/2/3/4 con valores 4.3/2.5/3.5...).
+    chart.Refresh()
+    wb.Close(SaveChanges=False)              # cierra el workbook embebido (sin Excel huérfano)
 
     # ── Formato ─────────────────────────────────────────────────────────────
     # Overlap 100 %: en cada posición del eje X las 3 barras se superponen
@@ -635,6 +649,7 @@ def _insertar_grafico_barras_nativo(doc, bookmark, counts,
         pass
 
     # Color, nombre y etiquetas por serie
+    n_series = len(filas)
     for i, ((nom, hexcol), val) in enumerate(zip(filas, vals), start=1):
         try:
             s = chart.SeriesCollection(i)
@@ -642,7 +657,20 @@ def _insertar_grafico_barras_nativo(doc, bookmark, counts,
             s.Format.Fill.ForeColor.RGB = _rgb_office(hexcol)
             s.Format.Fill.Visible       = -1   # msoTrue
             s.Format.Line.Visible       = 0    # sin borde
-            s.HasDataLabels             = val > 0
+            # Etiquetas: en la matriz diagonal cada serie tiene puntos en cero fuera
+            # de su diagonal. Mostrar la etiqueta SOLO en el punto diagonal (i) y solo
+            # si el valor es > 0, para evitar los "0" espurios bajo las barras.
+            s.HasDataLabels = val > 0
+            if val > 0:
+                try:
+                    npts = s.Points().Count
+                except Exception:
+                    npts = n_series
+                for j in range(1, npts + 1):
+                    try:
+                        s.Points(j).HasDataLabel = (j == i)
+                    except Exception:
+                        pass
         except Exception:
             pass
 
