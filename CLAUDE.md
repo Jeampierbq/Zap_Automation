@@ -148,6 +148,13 @@ Per-URL section structure (inside section 5):
   - `5.N.1 Tabla de Hallazgos`
   - `5.N.2 Detalle de Hallazgos`
 
+**Native editable severity chart (Windows only, `_insertar_grafico_barras_nativo`):**
+After saving, `_actualizar_toc_con_word` reopens the docx via win32com and replaces the matplotlib PNG with a native Office bar chart (3 series Alto/Medio/Bajo in a diagonal matrix + Overlap=100 so each bar has its own color and a legend entry). Three non-obvious gotchas — getting any of them wrong silently reverts the chart to `AddChart2`'s sample data (`Categoría 1/2/3/4`, values `4.3/2.5/...`). This regressed twice before; do NOT "simplify" without re-testing:
+- **`chart.Refresh()` is mandatory** after writing the embedded workbook. `wb.Close(SaveChanges=True)` does NOT sync the chart's cache (`c:numCache` in `chart1.xml`) — only `Refresh()` does. Close the workbook with `SaveChanges=False` afterward to avoid orphan EXCEL.EXE processes.
+- **`SetSourceData`** must shrink the range to exactly N+1 rows/cols; `AddChart2` defaults to 4 categories and leaves a phantom 4th point.
+- **Data labels go per-point, not per-series** (`s.Points(j).HasDataLabel = (j == i)`, only when `val > 0`) — series-level labels print spurious `0`s on the diagonal's empty points.
+If win32com/Word is unavailable (e.g. Linux), the matplotlib PNG stays as fallback and `updateFields` is left on.
+
 Severity colors used throughout all tables:
 - Alto: `C00000` (dark red)
 - Medio: `ED7D31` (orange)
