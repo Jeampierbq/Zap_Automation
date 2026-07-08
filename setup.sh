@@ -59,6 +59,7 @@ echo
 
 # ── Crear entorno virtual si no existe ──
 VENV="$ROOT/.venv"
+USE_VENV=true
 if [ ! -d "$VENV" ]; then
     echo "[INFO] Creando entorno virtual..."
     "$PYTHON_CMD" -m venv "$VENV" 2>/dev/null
@@ -67,24 +68,56 @@ if [ ! -d "$VENV" ]; then
         sudo apt-get install -y python3-venv python3-full 2>/dev/null || \
         sudo dnf install -y python3-venv 2>/dev/null
         "$PYTHON_CMD" -m venv "$VENV"
+        if [ $? -ne 0 ]; then
+            echo "[AVISO] No se pudo crear entorno virtual. Usando pip del sistema..."
+            USE_VENV=false
+        fi
     fi
 fi
 
-PYTHON_VENV="$VENV/bin/python"
-PIP_VENV="$VENV/bin/pip"
+if [ "$USE_VENV" = true ] && [ -f "$VENV/bin/python" ]; then
+    PYTHON_VENV="$VENV/bin/python"
+    PIP_VENV="$VENV/bin/pip"
+else
+    PYTHON_VENV="$PYTHON_CMD"
+    PIP_VENV="$PYTHON_CMD -m pip"
+    USE_VENV=false
+fi
 
 echo "[INFO] Actualizando pip..."
-"$PIP_VENV" install --upgrade pip >/dev/null 2>&1
+$PIP_VENV install --upgrade pip >/dev/null 2>&1
+
 echo "[INFO] Instalando dependencias..."
-# Nota: pywin32 (en requirements.txt) solo se instala en Windows; en Linux pip lo
-# ignora por el marcador de plataforma. El indice del Word se actualizara al abrir
-# el documento en una maquina con Microsoft Word.
-"$PIP_VENV" install -r "$ROOT/zap-reportes/venv/requirements.txt"
+# pywin32 solo se instala en Windows (marcador sys_platform en requirements.txt).
+# En Linux pip lo ignora automaticamente sin error.
+$PIP_VENV install -r "$ROOT/zap-reportes/venv/requirements.txt"
 if [ $? -ne 0 ]; then
     echo
-    echo "[ERROR] Fallo la instalacion de dependencias."
+    echo "[AVISO] Fallo instalacion en venv. Reintentando con --break-system-packages..."
+    $PIP_VENV install -r "$ROOT/zap-reportes/venv/requirements.txt" --break-system-packages
+    if [ $? -ne 0 ]; then
+        echo
+        echo "[ERROR] Fallo la instalacion de dependencias. Intenta manualmente:"
+        echo "        pip install -r zap-reportes/venv/requirements.txt --break-system-packages"
+        exit 1
+    fi
+fi
+
+# ── Verificar que los paquetes criticos quedaron instalados ──
+echo "[INFO] Verificando instalacion..."
+PAQUETES_FALTANTES=""
+for pkg in requests python-docx lxml matplotlib deep_translator; do
+    $PYTHON_VENV -c "import importlib; importlib.import_module('$(echo $pkg | tr - _)')" 2>/dev/null
+    if [ $? -ne 0 ]; then
+        PAQUETES_FALTANTES="$PAQUETES_FALTANTES $pkg"
+    fi
+done
+if [ -n "$PAQUETES_FALTANTES" ]; then
+    echo "[ERROR] Los siguientes paquetes no se instalaron correctamente:$PAQUETES_FALTANTES"
+    echo "        Intenta manualmente: pip install$PAQUETES_FALTANTES --break-system-packages"
     exit 1
 fi
+echo "[OK] Todos los paquetes instalados correctamente."
 
 echo
 echo "============================================================"
