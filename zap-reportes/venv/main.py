@@ -5,7 +5,7 @@ import os
 import sys
 import re
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin, urlencode
 from generador import generar_word_plantilla
 import config
 
@@ -75,10 +75,12 @@ def esperar_progreso(endpoint, params, tiempo_max, etiqueta):
 def esperar_ajax(tiempo_max):
     inicio = time.time()
     ultimo = ""
+    fallos_seguidos = 0   # consultas de estado fallidas consecutivas
     while True:
         try:
             data   = zap_get("/JSON/ajaxSpider/view/status/")
             estado = data.get("status", "")
+            fallos_seguidos = 0
             if estado != ultimo:
                 print(f"\r    Spider AJAX: {estado}   ", end="", flush=True)
                 ultimo = estado
@@ -86,7 +88,19 @@ def esperar_ajax(tiempo_max):
                 print("")
                 return True
         except:
-            print(f"\r    Esperando Spider AJAX...   ", end="", flush=True)
+            fallos_seguidos += 1
+            print(f"\r    Esperando Spider AJAX... ({fallos_seguidos})   ", end="", flush=True)
+            # Red de seguridad: si ZAP no responde el estado por ~1 min seguido,
+            # algo se atascó (no quedarse "seco"). Se aborta el AJAX y se continúa.
+            if fallos_seguidos >= 12:
+                print("")
+                warn("ZAP no responde el estado del AJAX (~60s). Abortando AJAX y continuando.")
+                try:
+                    zap_get("/JSON/ajaxSpider/action/stop/")
+                    time.sleep(3)
+                except:
+                    pass
+                return False
         if time.time() - inicio > tiempo_max:
             print("")
             warn("Tiempo max AJAX. Deteniendo Chrome...")
@@ -208,18 +222,37 @@ def _crear_contexto(url):
     log(f"Contexto '{nombre}' → scope: {dominio_base}")
     return nombre, ctx_id
 
-def fase_spider_tradicional(url, ctx_nombre=""):
+def fase_spider_tradicional(url, ctx_nombre="", ctx_id="", auth=None):
     subtitulo("FASE 1/3: Spider Tradicional")
-    data = zap_get("/JSON/spider/action/scan/", {
-        "url":         url,
-        "maxChildren": "0",
-        "recurse":     "true",
-        "contextName": ctx_nombre,
-        "subtreeOnly": "false",
-    })
-    spider_id = data.get("scan")
+    data = None
+    if auth and auth.get("user_id") is not None and ctx_id:
+        # Spider autenticado: usa contextId + userId (scanAsUser)
+        log(f"Spider como usuario autenticado (userId={auth['user_id']})")
+        data = zap_get("/JSON/spider/action/scanAsUser/", {
+            "contextId":   ctx_id,
+            "userId":      auth["user_id"],
+            "url":         url,
+            "maxChildren": "0",
+            "recurse":     "true",
+            "subtreeOnly": "false",
+        })
+        # OJO: el endpoint scanAsUser devuelve el id bajo la clave "scanAsUser",
+        # no "scan". Hay que leer ambas para no dar un falso "no disponible".
+        if data.get("scan") is None and data.get("scanAsUser") is None:
+            warn(f"Spider tradicional autenticado no disponible — respuesta ZAP: {data}")
+            warn("Reintentando spider tradicional en modo estándar (la sesión la aporta el forced-user).")
+            data = None
+    if data is None:
+        data = zap_get("/JSON/spider/action/scan/", {
+            "url":         url,
+            "maxChildren": "0",
+            "recurse":     "true",
+            "contextName": ctx_nombre,
+            "subtreeOnly": "false",
+        })
+    spider_id = data.get("scan") or data.get("scanAsUser")
     if spider_id is None:
-        raise Exception("No se pudo iniciar Spider tradicional")
+        raise Exception(f"No se pudo iniciar Spider tradicional — respuesta ZAP: {data}")
     log(f"Spider ID: {spider_id}")
     completado = esperar_progreso("/JSON/spider/view/status/",
                                   {"scanId": spider_id},
@@ -237,20 +270,36 @@ def fase_spider_tradicional(url, ctx_nombre=""):
         warn(f"Spider tradicional pausado por tiempo máximo{urls_encontradas} — continuando con lo descubierto")
     time.sleep(2)
 
-def _intentar_ajax_con_browser(url, browser, ctx_nombre=""):
+def _intentar_ajax_con_browser(url, browser, ctx_nombre="", auth=None):
     """Intenta lanzar el spider AJAX con un browser específico. Retorna True si OK."""
     try:
         zap_get("/JSON/ajaxSpider/action/setOptionBrowserId/", {"String": browser})
+        # Límite de seguridad: en modo autenticado un AJAX sin tope (AJAX_MAX_DURATION=0)
+        # puede colgarse indefinidamente si la sesión falla. Forzamos un máximo razonable.
+        dur = config.AJAX_MAX_DURATION
+        if auth and (not dur or int(dur) == 0):
+            dur = 15  # minutos
+            log("AJAX autenticado: límite de duración fijado en 15 min (anti-cuelgue)")
         zap_get("/JSON/ajaxSpider/action/setOptionMaxDuration/",
-                {"Integer": str(config.AJAX_MAX_DURATION)})
+                {"Integer": str(dur)})
         zap_get("/JSON/ajaxSpider/action/setOptionMaxCrawlDepth/",
                 {"Integer": str(config.AJAX_MAX_CRAWL_DEPTH)})
-        data = zap_get("/JSON/ajaxSpider/action/scan/", {
-            "url":         url,
-            "inScope":     "true" if ctx_nombre else "false",
-            "contextName": ctx_nombre,
-            "subtreeOnly": "false",
-        })
+        if auth and auth.get("user_name") and ctx_nombre:
+            # AJAX autenticado: a diferencia del spider/ascan, este endpoint usa
+            # contextName + userName (no ids) — quirk de la API de ZAP.
+            data = zap_get("/JSON/ajaxSpider/action/scanAsUser/", {
+                "contextName": ctx_nombre,
+                "userName":    auth["user_name"],
+                "url":         url,
+                "subtreeOnly": "false",
+            })
+        else:
+            data = zap_get("/JSON/ajaxSpider/action/scan/", {
+                "url":         url,
+                "inScope":     "true" if ctx_nombre else "false",
+                "contextName": ctx_nombre,
+                "subtreeOnly": "false",
+            })
         if data.get("result") == "OK":
             return True
         # Si ZAP reporta error de browser, lanza excepción para el fallback
@@ -290,13 +339,16 @@ def _es_sitio_estatico(url):
         return False  # si no se puede verificar, asumir JS-heavy (más seguro)
 
 
-def fase_spider_ajax(url, ctx_nombre=""):
+def fase_spider_ajax(url, ctx_nombre="", auth=None):
     subtitulo("FASE 2/3: Spider AJAX")
 
     # Si AJAX está desactivado en config, saltar
     if not getattr(config, 'AJAX_ENABLED', True):
         warn("Spider AJAX desactivado (AJAX_ENABLED=False). Saltando fase 2...")
         return
+
+    if auth and auth.get("user_name"):
+        log(f"Spider AJAX como usuario autenticado ({auth['user_name']})")
 
     # Orden de browsers reales a intentar (htmlunit excluido — JS limitado, resultados pobres)
     browsers_fallback = []
@@ -308,7 +360,7 @@ def fase_spider_ajax(url, ctx_nombre=""):
     for browser in browsers_fallback:
         try:
             log(f"Intentando Spider AJAX con browser: {browser}")
-            _intentar_ajax_con_browser(url, browser, ctx_nombre)
+            _intentar_ajax_con_browser(url, browser, ctx_nombre, auth)
             log(f"Spider AJAX iniciado con: {browser}")
             iniciado = True
             break
@@ -322,7 +374,7 @@ def fase_spider_ajax(url, ctx_nombre=""):
         if _es_sitio_estatico(url):
             log("Sitio estático detectado — intentando htmlunit como último recurso...")
             try:
-                _intentar_ajax_con_browser(url, "htmlunit", ctx_nombre)
+                _intentar_ajax_con_browser(url, "htmlunit", ctx_nombre, auth)
                 log("Spider AJAX iniciado con: htmlunit")
                 iniciado = True
             except Exception as e:
@@ -335,7 +387,10 @@ def fase_spider_ajax(url, ctx_nombre=""):
         warn("Spider AJAX saltado — instala Firefox o Chrome para escaneos JS completos.")
         warn("El escaneo continúa solo con Spider Tradicional (sitios JS-heavy pueden quedar incompletos).")
         return
-    completado = esperar_ajax(config.TIEMPO_SPIDER_AJAX)
+    espera_max = config.TIEMPO_SPIDER_AJAX
+    if auth:
+        espera_max = min(espera_max, 1500)  # 25 min máx autenticado (anti-cuelgue "seco")
+    completado = esperar_ajax(espera_max)
     cerrar_ajax()
     if completado:
         ok("Spider AJAX finalizado correctamente — exploración JS completada")
@@ -343,22 +398,40 @@ def fase_spider_ajax(url, ctx_nombre=""):
         warn("Spider AJAX pausado por tiempo máximo — continuando con lo descubierto")
     time.sleep(3)
 
-def fase_escaneo_activo(url, ctx_id=""):
+def fase_escaneo_activo(url, ctx_id="", auth=None):
     politica = config.SCAN_POLICY or "Default"
     subtitulo(f"FASE 3/3: Escaneo Activo — política: {politica}")
     log("Iniciando escaneo activo nivel ALTO...")
-    data = zap_get("/JSON/ascan/action/scan/", {
-        "url":            url,
-        "recurse":        "true",
-        "inScopeOnly":    "true" if ctx_id else "false",
-        "scanPolicyName": config.SCAN_POLICY,
-        "method":         "",
-        "postData":       "",
-        "contextId":      ctx_id,
-    })
-    scan_id = data.get("scan")
+    data = None
+    if auth and auth.get("user_id") is not None and ctx_id:
+        log(f"Escaneo activo como usuario autenticado (userId={auth['user_id']})")
+        data = zap_get("/JSON/ascan/action/scanAsUser/", {
+            "url":            url,
+            "contextId":      ctx_id,
+            "userId":         auth["user_id"],
+            "recurse":        "true",
+            "scanPolicyName": config.SCAN_POLICY,
+            "method":         "",
+            "postData":       "",
+        })
+        # scanAsUser devuelve el id bajo la clave "scanAsUser", no "scan".
+        if data.get("scan") is None and data.get("scanAsUser") is None:
+            warn(f"Escaneo activo autenticado no disponible — respuesta ZAP: {data}")
+            warn("Reintentando escaneo activo estándar (la sesión la aporta el forced-user).")
+            data = None
+    if data is None:
+        data = zap_get("/JSON/ascan/action/scan/", {
+            "url":            url,
+            "recurse":        "true",
+            "inScopeOnly":    "true" if ctx_id else "false",
+            "scanPolicyName": config.SCAN_POLICY,
+            "method":         "",
+            "postData":       "",
+            "contextId":      ctx_id,
+        })
+    scan_id = data.get("scan") or data.get("scanAsUser")
     if scan_id is None:
-        raise Exception("No se pudo iniciar Escaneo Activo")
+        raise Exception(f"No se pudo iniciar Escaneo Activo — respuesta ZAP: {data}")
     log(f"Scan ID: {scan_id} — esperando que ZAP complete al 100%...")
     completado = esperar_progreso("/JSON/ascan/view/status/",
                                   {"scanId": scan_id},
@@ -732,12 +805,349 @@ def priorizar_alertas(alertas):
 
     return altos + medios_top + bajos_top
 
-def escanear_url(url):
+# ─────────────────────────────────────────────────────────────────────────────
+# AUTENTICACIÓN (Caja Gris) — neutral: browser-based → form-based → json-based
+# ─────────────────────────────────────────────────────────────────────────────
+def _zap_version():
+    try:
+        return zap_get("/JSON/core/view/version/").get("version", "")
+    except Exception:
+        return ""
+
+def _auth_browser_soportado():
+    """True si el ZAP soporta browserBasedAuthentication (add-on instalado)."""
+    try:
+        data    = zap_get("/JSON/authentication/view/getSupportedAuthenticationMethods/")
+        metodos = data.get("supportedMethods", []) or data.get("methods", [])
+        nombres = [m if isinstance(m, str) else m.get("name", "") for m in metodos]
+        return any("browser" in n.lower() for n in nombres)
+    except Exception:
+        return False
+
+def _descargar_html(url, max_bytes=80000, timeout=12):
+    try:
+        import urllib.request
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read(max_bytes).decode('utf-8', errors='ignore')
+    except Exception:
+        return ""
+
+def _detectar_login_formulario(login_url, timeout=12):
+    """Busca un <form> con campo password. Devuelve {action, user_field, pass_field}
+    o None si no parece login por formulario HTML (probable API/SPA)."""
+    html = _descargar_html(login_url, timeout=timeout)
+    if not html:
+        return None
+    for fm in re.finditer(r'<form\b[^>]*>(.*?)</form>', html, re.IGNORECASE | re.DOTALL):
+        bloque, cuerpo = fm.group(0), fm.group(1)
+        if not re.search(r'type\s*=\s*["\']?password', cuerpo, re.IGNORECASE):
+            continue
+        m_action = re.search(r'action\s*=\s*["\']([^"\']*)["\']', bloque, re.IGNORECASE)
+        action   = urljoin(login_url, m_action.group(1)) if m_action and m_action.group(1) else login_url
+        m_pass = (re.search(r'<input[^>]*type\s*=\s*["\']?password[^>]*name\s*=\s*["\']([^"\']+)', cuerpo, re.IGNORECASE)
+                  or re.search(r'<input[^>]*name\s*=\s*["\']([^"\']+)["\'][^>]*type\s*=\s*["\']?password', cuerpo, re.IGNORECASE))
+        pass_field = m_pass.group(1) if m_pass else "password"
+        user_field = None
+        for inp in re.finditer(r'<input\b[^>]*>', cuerpo, re.IGNORECASE):
+            tag = inp.group(0)
+            if re.search(r'type\s*=\s*["\']?(password|hidden|submit|button|checkbox|radio)', tag, re.IGNORECASE):
+                continue
+            m_name = re.search(r'name\s*=\s*["\']([^"\']+)["\']', tag)
+            if m_name:
+                user_field = m_name.group(1)
+                break
+        return {"action": action, "user_field": user_field or "username", "pass_field": pass_field}
+    return None
+
+def _form_password_de_html(html, base_url):
+    """(action, hidden_dict) del primer <form> con campo password; (None, {}) si no hay.
+    Los hidden incluyen tokens CSRF necesarios para que el login de validación pase."""
+    for fm in re.finditer(r'<form\b[^>]*>(.*?)</form>', html, re.IGNORECASE | re.DOTALL):
+        bloque, cuerpo = fm.group(0), fm.group(1)
+        if not re.search(r'type\s*=\s*["\']?password', cuerpo, re.IGNORECASE):
+            continue
+        m_action = re.search(r'action\s*=\s*["\']([^"\']*)["\']', bloque, re.IGNORECASE)
+        action   = urljoin(base_url, m_action.group(1)) if m_action and m_action.group(1) else base_url
+        hidden = {}
+        for inp in re.finditer(r'<input\b[^>]*>', cuerpo, re.IGNORECASE):
+            tag = inp.group(0)
+            if not re.search(r'type\s*=\s*["\']?hidden', tag, re.IGNORECASE):
+                continue
+            m_n = re.search(r'name\s*=\s*["\']([^"\']+)["\']', tag)
+            m_v = re.search(r'value\s*=\s*["\']([^"\']*)["\']', tag)
+            if m_n:
+                hidden[m_n.group(1)] = m_v.group(1) if m_v else ""
+        return action, hidden
+    return None, {}
+
+def _validar_credenciales(login_info, login_url, usuario, password, es_form):
+    """Pre-check heurístico y neutral: intenta el login directo y deduce si las
+    credenciales son válidas. Devuelve (valido: bool, motivo: str).
+    Usa una sesión propia para arrastrar cookies + token CSRF (campos hidden), e
+    ignora errores de certificado, para no dar falsos negativos en portales reales."""
+    try:
+        try:
+            requests.packages.urllib3.disable_warnings()
+        except Exception:
+            pass
+        sess = requests.Session()
+        sess.headers['User-Agent'] = 'Mozilla/5.0'
+        if es_form and login_info:
+            # GET fresco de la página de login → cookies + token CSRF vigentes
+            action, hidden = login_info["action"], {}
+            try:
+                g = sess.get(login_url, timeout=12, verify=False)
+                a2, hidden = _form_password_de_html(g.text or "", login_url)
+                if a2:
+                    action = a2
+            except Exception:
+                pass
+            datos = dict(hidden)
+            datos[login_info["user_field"]] = usuario
+            datos[login_info["pass_field"]] = password
+            r = sess.post(action, data=datos, timeout=15, allow_redirects=False, verify=False)
+        else:
+            r = sess.post(login_url, json={"username": usuario, "password": password},
+                          timeout=15, allow_redirects=False, verify=False)
+        cuerpo = (r.text or "")[:3000].lower()
+        if r.status_code in (401, 403):
+            return False, f"HTTP {r.status_code} (no autorizado)"
+        errores = ['incorrect', 'inválid', 'invalid', 'no válid', 'credencial', 'contraseña',
+                   'usuario o', 'denied', 'failed', 'fallida', 'wrong', 'erróne']
+        if r.status_code == 200 and any(e in cuerpo for e in errores):
+            return False, "la respuesta indica credenciales incorrectas"
+        if 300 <= r.status_code < 400:
+            return True, f"redirección HTTP {r.status_code} (login aceptado)"
+        if len(r.cookies) > 0:
+            return True, "sesión iniciada (cookie recibida)"
+        if any(t in cuerpo for t in ['token', 'jwt', '"access', 'bearer']):
+            return True, "token de sesión recibido"
+        return True, "respuesta ambigua — se asume válido (revisa el reporte)"
+    except Exception as e:
+        return True, f"no se pudo validar ({e}) — se continúa de todas formas"
+
+_RUTAS_LOGIN_COMUNES = [
+    '/login', '/signin', '/sign-in', '/iniciar-sesion', '/iniciarsesion',
+    '/acceso', '/ingresar', '/ingreso', '/auth/login', '/usuario/login',
+    '/user/login', '/account/login', '/sesion', '/admin/login',
+]
+
+def _descubrir_login_url(target_url):
+    """Ubica la página de login automáticamente a partir de la URL objetivo,
+    para no tener que pedírsela al usuario. Estrategia:
+      1. ¿El propio target ya es un login con formulario?
+      2. Enlaces tipo 'login/ingresar/acceso...' en el HTML del target o la raíz.
+      3. Rutas comunes (/login, /signin, ...).
+      4. Fallback: el target mismo (browser-based aún puede intentarlo)."""
+    if _detectar_login_formulario(target_url):
+        return target_url
+    base = dominio_de(target_url)
+    candidatos = []
+    for pagina in (target_url, base):
+        html = _descargar_html(pagina, timeout=8)
+        if not html:
+            continue
+        for m in re.finditer(r'<a\b[^>]*href\s*=\s*["\']([^"\']+)["\'][^>]*>(.*?)</a>',
+                             html, re.IGNORECASE | re.DOTALL):
+            href  = m.group(1)
+            texto = re.sub(r'<[^>]+>', '', m.group(2)).lower()
+            if re.search(r'log\s*in|inicia|ingres|acce|sign\s*in|entrar|sesi',
+                         (href + ' ' + texto).lower()):
+                candidatos.append(urljoin(pagina, href))
+    for ruta in _RUTAS_LOGIN_COMUNES:
+        candidatos.append(urljoin(base + '/', ruta.lstrip('/')))
+    vistos, orden = set(), []
+    for c in candidatos:
+        if c not in vistos:
+            vistos.add(c); orden.append(c)
+    # Cap a 8 candidatos con timeout corto para no colgar el inicio del escaneo
+    for c in orden[:8]:
+        if _detectar_login_formulario(c, timeout=6):
+            return c
+    return target_url
+
+_API_LOGIN_PATHS = [
+    '/api/login', '/api/auth/login', '/auth/login', '/api/v1/auth/login',
+    '/api/v1/login', '/api/usuarios/login', '/api/users/login', '/api/user/login',
+    '/api/account/login', '/api/signin', '/api/auth/signin', '/api/session',
+    '/api/sesion/login', '/login', '/api/auth',
+]
+_API_BODY_KEYS = [
+    ('email', 'password'), ('username', 'password'), ('correo', 'password'),
+    ('usuario', 'password'), ('user', 'pass'), ('correo', 'clave'),
+    ('usuario', 'clave'), ('email', 'clave'),
+]
+
+def _descubrir_login_api(base_url, usuario, password):
+    """Detecta automáticamente el endpoint de login JSON de una SPA/API (NEUTRAL),
+    probando rutas y formas de cuerpo comunes. No hardcodea ningún sitio.
+    Devuelve dict {endpoint, ukey, pkey, valid, motivo} o None si no halló endpoint.
+      valid=True  → endpoint OK y credenciales correctas (token recibido)
+      valid=False → endpoint OK pero credenciales rechazadas (401/error)"""
+    try:
+        requests.packages.urllib3.disable_warnings()
+    except Exception:
+        pass
+    sess = requests.Session()
+    sess.headers['User-Agent'] = 'Mozilla/5.0'
+    rechazo  = None   # primer endpoint que rechazó (401) — se reporta solo si NINGÚN
+                      # otro endpoint/cuerpo logra un token (evita falsos "credenciales malas")
+    intentos = 0
+    for path in _API_LOGIN_PATHS:
+        endpoint = urljoin(base_url + '/', path.lstrip('/'))
+        for ukey, pkey in _API_BODY_KEYS:
+            if intentos > 40:
+                return rechazo
+            intentos += 1
+            try:
+                r = sess.post(endpoint, json={ukey: usuario, pkey: password},
+                              timeout=8, allow_redirects=False, verify=False)
+            except Exception:
+                break  # endpoint no responde → siguiente ruta
+            if r.status_code == 404:
+                break  # ruta inexistente → no probar más cuerpos aquí
+            ctype  = r.headers.get('Content-Type', '').lower()
+            cuerpo = (r.text or '')[:2000].lower()
+            # Catch-all de SPA devolviendo index.html → no es un endpoint de API
+            if 'text/html' in ctype or '<html' in cuerpo or '<!doctype html' in cuerpo:
+                break
+            # Éxito definitivo: 2xx con indicio de token/sesión
+            if r.status_code in (200, 201) and any(
+                    t in cuerpo for t in ['token', 'jwt', 'access', 'bearer', 'sessionid', 'refresh']):
+                return {"endpoint": endpoint, "ukey": ukey, "pkey": pkey,
+                        "valid": True, "motivo": f"token recibido en {path} (cuerpo {ukey}/{pkey})"}
+            # Rechazo: se RECUERDA pero se sigue probando (otro endpoint/cuerpo podría aceptar)
+            if rechazo is None and (r.status_code in (401, 403) or any(
+                    e in cuerpo for e in ['invalid', 'incorrect', 'inválid', 'credencial', 'no autoriz'])):
+                rechazo = {"endpoint": endpoint, "ukey": ukey, "pkey": pkey,
+                           "valid": False, "motivo": f"HTTP {r.status_code} en {path}"}
+    return rechazo
+
+def _configurar_autenticacion(ctx_id, ctx_nombre, target_url, usuario, password):
+    """Configura autenticación neutral en el contexto ZAP y crea el usuario.
+    La página de login se descubre automáticamente desde `target_url`.
+    Estrategia en cascada: browser-based (si el ZAP lo soporta) → form-based (si se
+    detecta formulario) → json-based (fallback API). Devuelve dict auth o None."""
+    USER_NAME = "auth_user"
+    log(f"ZAP versión detectada: {_zap_version() or '?'}")
+
+    login_url = _descubrir_login_url(target_url)
+    log(f"Página de login detectada automáticamente: {login_url}")
+    login_info = _detectar_login_formulario(login_url)
+    es_form    = login_info is not None
+    if es_form:
+        log(f"Login por FORMULARIO detectado (campos: {login_info['user_field']}/{login_info['pass_field']})")
+    else:
+        log("No se detectó formulario HTML — se asume API/JSON o SPA")
+
+    # Validación + elección de método (cascada neutral, browser-based como último
+    # recurso). El objetivo: dar un ERROR CLARO si no se puede autenticar, en vez
+    # de dejar el escaneo "seco".
+    metodo = cfg = None
+
+    if es_form:
+        valido, motivo = _validar_credenciales(login_info, login_url, usuario, password, True)
+        if not valido:
+            print()
+            error(f"LA AUTENTICACIÓN NO FUNCIONA — {motivo}")
+            error("Causa probable: usuario/contraseña incorrectos.")
+            warn(">>> Se procede con evaluación de CAJA NEGRA (sin autenticación).")
+            warn(">>> El escaneo continúa normal con la zona pública.")
+            print()
+            return None
+        ok(f"Credenciales validadas contra el formulario: {motivo}")
+        metodo = "formBasedAuthentication"
+        body   = f"{login_info['user_field']}={{%username%}}&{login_info['pass_field']}={{%password%}}"
+        cfg    = urlencode({"loginUrl": login_info["action"], "loginRequestData": body})
+        log("Método de autenticación: form-based (detectado del HTML)")
+    else:
+        # SPA/API: descubrir el endpoint de login JSON automáticamente (neutral)
+        log("Buscando la API de login automáticamente (SPA/API)...")
+        api = _descubrir_login_api(dominio_de(target_url), usuario, password)
+        if api and api["valid"]:
+            ok(f"API de login detectada y credenciales VÁLIDAS: {api['motivo']}")
+            metodo = "jsonBasedAuthentication"
+            body   = '{"' + api["ukey"] + '":"{%username%}","' + api["pkey"] + '":"{%password%}"}'
+            cfg    = urlencode({"loginUrl": api["endpoint"], "loginRequestData": body})
+            log(f"Método de autenticación: json-based (endpoint {api['endpoint']})")
+        else:
+            # No se pudo CONFIRMAR un login automático (token). En vez de arriesgar un
+            # browser-based que se queda "seco" (abre Firefox y si falla se atora), damos
+            # un aviso claro y seguimos con Caja Negra. El escaneo NO se detiene.
+            print()
+            if api and api["valid"] is False:
+                error("LA AUTENTICACIÓN NO FUNCIONA — la API de login rechazó las credenciales.")
+                error("Causa probable: contraseña incorrecta o formato de login no estándar.")
+            else:
+                error("LA AUTENTICACIÓN NO FUNCIONA — no se detectó un login automático (SPA no estándar).")
+            warn(">>> Se procede con evaluación de CAJA NEGRA (sin autenticación).")
+            warn(">>> El escaneo continúa normal con la zona pública.")
+            print()
+            return None
+
+    try:
+        zap_get("/JSON/authentication/action/setAuthenticationMethod/", {
+            "contextId": ctx_id, "authMethodName": metodo, "authMethodConfigParams": cfg})
+    except Exception as e:
+        error(f"No se pudo fijar el método de autenticación: {e}")
+        return None
+
+    # 3) Indicador de sesión genérico (permite a ZAP re-autenticar si expira)
+    try:
+        zap_get("/JSON/authentication/action/setLoggedInIndicator/", {
+            "contextId": ctx_id,
+            "loggedInIndicatorRegex": r"(?i)(logout|cerrar sesi|sign out|salir|mi cuenta|dashboard)"})
+    except Exception:
+        pass
+
+    # 4) Crear usuario + credenciales
+    try:
+        user_id = str(zap_get("/JSON/users/action/newUser/",
+                              {"contextId": ctx_id, "name": USER_NAME}).get("userId", ""))
+        if not user_id:
+            error("No se pudo crear el usuario en ZAP")
+            return None
+        zap_get("/JSON/users/action/setAuthenticationCredentials/", {
+            "contextId": ctx_id, "userId": user_id,
+            "authCredentialsConfigParams": urlencode({"username": usuario, "password": password})})
+        zap_get("/JSON/users/action/setUserEnabled/", {
+            "contextId": ctx_id, "userId": user_id, "enabled": "true"})
+    except Exception as e:
+        error(f"No se pudo crear/configurar el usuario: {e}")
+        return None
+
+    # 5) Modo usuario forzado: spider/ascan corren como este usuario
+    try:
+        zap_get("/JSON/forcedUser/action/setForcedUser/", {"contextId": ctx_id, "userId": user_id})
+        zap_get("/JSON/forcedUser/action/setForcedUserModeEnabled/", {"boolean": "true"})
+    except Exception:
+        pass
+
+    ok(f"Autenticación configurada (método={metodo}, userId={user_id})")
+    return {"user_id": user_id, "user_name": USER_NAME, "metodo": metodo}
+
+
+def _desactivar_forced_user():
+    """Apaga el modo usuario forzado (flag GLOBAL de ZAP). Necesario antes de un
+    escaneo anónimo para que no quede activo de una URL autenticada previa,
+    apuntando a un usuario ya borrado por limpiar_sesion."""
+    try:
+        zap_get("/JSON/forcedUser/action/setForcedUserModeEnabled/", {"boolean": "false"})
+    except Exception:
+        pass
+
+
+def escanear_url(url, cred=None):
     """
     Escanea una URL en 3 fases. Cada fase es tolerante a fallos:
     si falla, se registra el aviso y se continúa con la siguiente.
     El JSON siempre se exporta al final con lo que ZAP haya encontrado.
     Solo lanza excepción si el export final falla (sin datos).
+
+    Si `cred` trae {usuario, password}, se hace escaneo autenticado (Caja Gris):
+    la página de login se descubre sola desde `url`, se configura la autenticación
+    y las 3 fases corren como el usuario. Si no, el escaneo es anónimo (Caja Negra).
     """
     titulo(f"ESCANEANDO: {url}")
     inicio = time.time()
@@ -749,22 +1159,42 @@ def escanear_url(url):
     except Exception as e:
         warn(f"No se pudo crear contexto ZAP: {e}. Continuando sin scope...")
 
+    # Autenticación (Caja Gris) — opcional. La auth se configura ANTES del spider
+    # para que el crawler descubra también la zona privada tras el login.
+    auth = None
+    if cred and ctx_id:
+        subtitulo("Configurando autenticación (Caja Gris)")
+        try:
+            auth = _configurar_autenticacion(ctx_id, ctx_nombre,
+                                             url, cred["usuario"], cred["password"])
+        except Exception as e:
+            warn(f"Configuración de autenticación falló: {e}")
+        if auth is None:
+            warn("El escaneo continuará SIN autenticar (solo zona pública).")
+    elif cred and not ctx_id:
+        warn("Sin contexto ZAP no es posible autenticar. Escaneo anónimo.")
+
+    # Seguridad: sin auth, garantizar que el modo usuario forzado quede APAGADO
+    # (pudo quedar activo de una URL autenticada previa en la misma corrida).
+    if auth is None:
+        _desactivar_forced_user()
+
     # Fase 1 — no crítica
     try:
-        fase_spider_tradicional(url, ctx_nombre)
+        fase_spider_tradicional(url, ctx_nombre, ctx_id, auth)
     except Exception as e:
         warn(f"Spider Tradicional falló, continuando: {e}")
 
     # Fase 2 — no crítica
     try:
-        fase_spider_ajax(url, ctx_nombre)
+        fase_spider_ajax(url, ctx_nombre, auth)
     except Exception as e:
         warn(f"Spider AJAX falló, continuando: {e}")
         cerrar_ajax()
 
     # Fase 3 — no crítica
     try:
-        fase_escaneo_activo(url, ctx_id)
+        fase_escaneo_activo(url, ctx_id, auth)
     except Exception as e:
         warn(f"Escaneo Activo falló, continuando: {e}")
 
@@ -1210,6 +1640,37 @@ def _flujo_escaneo():
     _asegurar_politica_owasp_web()
     cerrar_ajax()
 
+    # ── Escaneo autenticado (Caja Gris) — opcional ──────────────────────
+    # Las credenciales se piden aquí y NO se guardan en disco. Se aplican a
+    # todas las URLs de la corrida (pensado para un mismo sitio autenticado).
+    cred = None
+    try:
+        resp = input("\n  ¿Escaneo autenticado (Caja Gris)? [s/N]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        resp = "n"
+    if resp in ("s", "si", "sí", "y", "yes"):
+        print("  Ingresa las credenciales (no se guardan en disco).")
+        print("  La página de login se detecta automáticamente desde la URL objetivo.")
+        try:
+            usuario = input("    Usuario    : ").strip()
+            # Entrada VISIBLE a propósito: el analista necesita VER la contraseña que
+            # escribe/pega para confirmar que no se equivoca (no se guarda en disco y
+            # getpass falla con el pegado en terminales de IDE).
+            password = input("    Contraseña : ").strip()
+        except (EOFError, KeyboardInterrupt):
+            usuario = password = ""
+        if usuario and password:
+            cred = {"usuario": usuario, "password": password}
+            # Confirmación en texto plano + longitud, para detectar errores de tipeo
+            # o espacios accidentales del pegado.
+            ok(f"Credenciales capturadas → Usuario: {usuario}")
+            ok(f"                          Contraseña: '{password}' ({len(password)} caracteres)")
+            ok("Escaneo autenticado activado — se aplicará a todas las URLs de esta corrida.")
+        elif usuario and not password:
+            warn("La contraseña quedó vacía. Escaneo anónimo (Caja Negra).")
+        else:
+            warn("Datos incompletos. Se realizará escaneo anónimo (Caja Negra).")
+
     resultados   = []
     inicio_total = time.time()
 
@@ -1217,7 +1678,7 @@ def _flujo_escaneo():
         print(f"\n  Procesando URL {i+1} de {len(config.URLS)}: {url}")
         limpiar_sesion()
         try:
-            alertas = escanear_url(url)
+            alertas = escanear_url(url, cred)
             conteo = {"3": 0, "2": 0, "1": 0, "0": 0}
             for a in alertas:
                 rc = str(a.get("riskcode", "0"))
