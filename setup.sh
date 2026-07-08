@@ -88,8 +88,16 @@ fi
 
 echo
 echo "============================================================"
-echo "  Instalacion completada. Iniciando programa..."
+echo "  Instalacion completada."
 echo "============================================================"
+echo
+echo "  NOTA: El grafico de barras del informe Word sera una imagen"
+echo "        estatica (PNG) en Linux/Mac porque esta maquina no"
+echo "        tiene Microsoft Word instalado."
+echo "        Para obtener un grafico nativo editable, genera el"
+echo "        informe desde una maquina Windows con Word instalado."
+echo
+echo "  Iniciando programa..."
 echo
 cd "$ROOT/zap-reportes/venv"
 "$PYTHON_VENV" main.py

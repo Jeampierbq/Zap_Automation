@@ -81,8 +81,15 @@ if errorlevel 1 (
 
 echo.
 echo ============================================================
-echo   Instalacion completada. Iniciando programa...
+echo   Instalacion completada.
 echo ============================================================
+echo.
+
+REM ── Verificar si Microsoft Word esta instalado ──
+powershell -NoProfile -Command "try { $w = New-Object -ComObject Word.Application; $w.Quit(); Write-Host '[OK] Microsoft Word detectado: el grafico del informe sera nativo y editable.' } catch { Write-Host '[AVISO] Microsoft Word NO detectado. El grafico del informe sera una imagen estatica (PNG).' ; Write-Host '        Instala Microsoft Word para obtener graficos editables.' }"
+echo.
+
+echo   Iniciando programa...
 echo.
 cd zap-reportes\venv
 %PYTHON_CMD% main.py
